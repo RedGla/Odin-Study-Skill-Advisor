@@ -52,14 +52,23 @@ with patch("dotenv.load_dotenv", return_value=False):
 
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database():
-    # Supabase API roles referenced by the deployed hardening migration.
-    # Test databases are disposable and the test owner is a local superuser.
+    # Mirror Supabase's API roles so privilege migrations are exercised in CI.
     with engine.begin() as connection:
-        connection.execute(text("""DO $$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
-        END $$"""))
+        connection.execute(text("""
+            DO $block$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                    CREATE ROLE anon NOLOGIN;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    CREATE ROLE authenticated NOLOGIN;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+                    CREATE ROLE service_role NOLOGIN;
+                END IF;
+            END
+            $block$
+        """))
     config = Config(str(BACKEND_DIR / "alembic.ini"))
     command.upgrade(config, "head")
     yield

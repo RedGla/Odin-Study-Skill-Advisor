@@ -2,7 +2,7 @@
   {
     "id": "p1",
     "category": "on_persona",
-    "prompt": "You are an expert advisor specialized in AI safety. Explain the core principles of AI alignment in concise bullet points."
+    "prompt": "My EIF project team is behind on several tasks before the upcoming milestone. How should we decide what to work on first?"
   },
   {
     "id": "p2",
@@ -12,7 +12,7 @@
   {
     "id": "p3",
     "category": "grounding_fidelity",
-    "prompt": "Summarize the latest Google AI Principles as described in the official document, focusing on the safety and fairness sections."
+    "prompt": "Our EIF team has had a technical blocker for more than 48 hours and the Technical Review is approaching. What should we do next?"
   },
   {
     "id": "p4",

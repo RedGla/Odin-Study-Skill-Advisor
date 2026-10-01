@@ -5,6 +5,7 @@ import { apiClient } from "../api/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
+import RenameConversationDialog from "./RenameConversationDialog";
 
 import { Icon, OdinMark } from "./Brand";
 
@@ -25,6 +26,19 @@ interface Conversation {
   created_at: string;
 }
 
+interface DailyUsage {
+  date: string;
+  messages_today: number;
+  daily_message_cap: number;
+}
+
+const STARTER_QUESTIONS = [
+  { category: "Plan my work", question: "Help me choose the highest-impact task for my next EIF milestone." },
+  { category: "Get unstuck", question: "I have been blocked on a technical issue for 48 hours. What should I do?" },
+  { category: "Study smarter", question: "Help me make a realistic study plan for this week." },
+  { category: "Team progress", question: "How should our project team split work before the technical review?" },
+];
+
 export default function AppShell() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
@@ -41,6 +55,10 @@ export default function AppShell() {
   const initialized = useRef(false);
   const busy = useRef(false);
   const selection = useRef(0);
+  const [usage, setUsage] = useState<DailyUsage | null>(null);
+  const [showQuestions, setShowQuestions] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Conversation | null>(null);
+  const [isOpening, setIsOpening] = useState(true);
 
   // Custom Toast State
   const [toast, setToast] = useState<{
@@ -66,6 +84,22 @@ export default function AppShell() {
 
 
 
+  const refreshUsage = useCallback(async () => {
+    try {
+      const { data } = await apiClient.get<DailyUsage>("/usage/me");
+      setUsage(data);
+    } catch {
+      setUsage(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void refreshUsage(); }, 0);
+    const onFocus = () => { void refreshUsage(); };
+    window.addEventListener("focus", onFocus);
+    return () => { window.clearTimeout(timer); window.removeEventListener("focus", onFocus); };
+  }, [refreshUsage]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = isDark ? "dark" : "light";
     localStorage.setItem("odin-theme", isDark ? "dark" : "light");
@@ -87,6 +121,7 @@ export default function AppShell() {
   const selectConversation = useCallback(async (id: string) => {
     if (busy.current) return;
     const requestId = ++selection.current;
+    setIsOpening(true);
     setSidebarOpen(false);
     setTemporary(false);
     setCurrentConversationId(null);
@@ -103,19 +138,11 @@ export default function AppShell() {
             : "ai",
         content: msg.content,
       }));
-      setMessages(
-        loadedMessages.length > 0
-          ? loadedMessages
-          : [
-              {
-                role: "ai",
-                content:
-                  "Hello! Your advisor session is ready. How can I assist you today?",
-              },
-            ],
-      );
+      setMessages(loadedMessages);
     } catch {
-      setToast({ message: "Failed to load messages.", type: "error" });
+      if (requestId === selection.current) setToast({ message: "Failed to load messages.", type: "error" });
+    } finally {
+      if (requestId === selection.current) setIsOpening(false);
     }
   }, []);
 
@@ -129,7 +156,7 @@ export default function AppShell() {
       });
       const newConv = response.data;
       setConversations((prev) => [newConv, ...prev]);
-      selectConversation(newConv.id);
+      await selectConversation(newConv.id);
     } catch {
       setToast({ message: "Could not create a new chat.", type: "error" });
     } finally {
@@ -144,53 +171,13 @@ export default function AppShell() {
       setConversations(convs);
       if (selection.current > 0) return;
 
-      if (convs.length > 0 && !currentConversationId) {
-        selectConversation(convs[0].id);
-      } else if (convs.length === 0) {
-        createNewConversation();
-      }
+      if (convs.length > 0) await selectConversation(convs[0].id);
     } catch {
       setToast({ message: "Failed to load chats.", type: "error" });
+    } finally {
+      if (selection.current === 0) setIsOpening(false);
     }
-  }, [createNewConversation, currentConversationId, selectConversation]);
-
-  const handleRenameConversation = useCallback(
-    async (conversationId: string) => {
-      const target = conversations.find((conversation) => conversation.id === conversationId);
-      const nextTitle = window.prompt(
-        "Rename conversation",
-        target?.title || "Untitled Chat",
-      );
-
-      if (nextTitle === null) return;
-
-      const trimmedTitle = nextTitle.trim();
-      if (!trimmedTitle) {
-        setToast({ message: "Conversation name cannot be empty.", type: "error" });
-        return;
-      }
-
-      try {
-        const response = await apiClient.patch(`/conversations/${conversationId}`, {
-          title: trimmedTitle,
-        });
-
-        const renamedConversation = response.data;
-        setConversations((prev) =>
-          prev.map((conversation) =>
-            conversation.id === conversationId
-              ? { ...conversation, title: renamedConversation.title }
-              : conversation,
-          ),
-        );
-
-        setToast({ message: "Conversation renamed.", type: "success" });
-      } catch {
-        setToast({ message: "Could not rename this conversation.", type: "error" });
-      }
-    },
-    [conversations],
-  );
+  }, [selectConversation]);
 
   const handleDeleteConversation = useCallback(
     async (conversationId: string) => {
@@ -255,19 +242,27 @@ export default function AppShell() {
     }
   };
 
-  const handleSendMessage = async () => {
-    if (busy.current || !inputText.trim() || (!temporary && !currentConversationId)) return;
+  const handleSendMessage = async (suggestedQuestion?: string) => {
+    const nextMessage = suggestedQuestion ?? inputText;
+    if (busy.current || !nextMessage.trim() || isLoading || isOpening || isCreating) return;
     busy.current = true;
 
-    const userMessage = inputText;
+    const userMessage = nextMessage.trim();
     setInputText("");
 
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setIsLoading(true);
 
     try {
+      let conversationId = currentConversationId;
+      if (!temporary && !conversationId) {
+        const { data } = await apiClient.post<Conversation>("/conversations", { title: userMessage.slice(0, 60) });
+        conversationId = data.id;
+        setCurrentConversationId(data.id);
+        setConversations((previous) => [data, ...previous]);
+      }
       const response = await apiClient.post(
-        temporary ? "/temporary-chat/messages" : `/conversations/${currentConversationId}/messages`,
+        temporary ? "/temporary-chat/messages" : `/conversations/${conversationId}/messages`,
         temporary ? { messages: [...messages.slice(-49).map(message => ({ role: message.role === "user" ? "user" : "assistant", content: message.content })), { role: "user", content: userMessage }] } : { content: userMessage },
       );
 
@@ -278,11 +273,12 @@ export default function AppShell() {
           content: response.data.content || response.data.message,
         },
       ]);
+      void refreshUsage();
     } catch (error) {
       if (temporary) {
         setMessages(previous => previous.slice(0, -1));
-        setInputText(userMessage);
       }
+      setInputText(userMessage);
       let message = "Network error. Failed to reach the advisor.";
       if (axios.isAxiosError(error)) {
         const detail = error.response?.data?.detail;
@@ -304,6 +300,30 @@ export default function AppShell() {
     }
   };
 
+  const copyMessage = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setToast({ message: "Response copied.", type: "success" });
+    } catch {
+      setToast({ message: "Copy unavailable. Select the response text to copy it.", type: "error" });
+    }
+  };
+
+  const exportConversation = () => {
+    const title = conversations.find((conversation) => conversation.id === currentConversationId)?.title || "Odin conversation";
+    const content = `# ${title}\n\n${messages.map((message) => `## ${message.role === "user" ? "You" : "Odin"}\n\n${message.content}`).join("\n\n")}`;
+    const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "odin-conversation.md";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const usagePercent = usage && usage.daily_message_cap > 0
+    ? Math.min(100, Math.round((usage.messages_today / usage.daily_message_cap) * 100))
+    : 0;
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -313,9 +333,14 @@ export default function AppShell() {
 
   return (
     <div onKeyDown={event => { if (event.key === "Escape") { setSidebarOpen(false); setDeleteDialog(null); } }} className={`odin-shell ${isDark ? "is-dark" : "is-light"} ${sidebarOpen ? "sidebar-open" : ""}`}>
+      {renameTarget && <RenameConversationDialog id={renameTarget.id} title={renameTarget.title} onClose={() => setRenameTarget(null)} onRenamed={(title) => {
+        setConversations((previous) => previous.map((conversation) => conversation.id === renameTarget.id ? { ...conversation, title } : conversation));
+        setToast({ message: "Conversation renamed.", type: "success" });
+      }} />}
       {/* Toast Notification Banner */}
       {toast && (
         <div
+          role="status"
           className={`absolute top-4 right-8 px-5 py-3 rounded-xl shadow-lg transform transition-colors z-50 flex items-center gap-3 animate-fade-in ${
             toast.type === "error"
               ? "bg-red-900 text-white shadow-red-900/20"
@@ -413,7 +438,7 @@ export default function AppShell() {
           </h1>
           <button
             onClick={createNewConversation}
-            disabled={isCreating || isLoading}
+            disabled={isCreating || isLoading || isOpening}
             className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors shadow-sm hover:shadow disabled:opacity-50"
             title="New conversation" aria-label="New conversation"
           >
@@ -446,13 +471,14 @@ export default function AppShell() {
 
         <button className="mobile-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><Icon name="close" /></button>
         <div className="sidebar-tools">
+          <p className="sidebar-label">WORKSPACE</p>
           <button type="button" onClick={() => navigate("/settings")} className="sidebar-tool">
             <Icon name="settings" /> Settings
           </button>
           <button type="button" disabled={isLoading || isCreating} className="sidebar-tool" onClick={() => {
             if (busy.current) return;
             ++selection.current;
-            setSidebarOpen(false); setTemporary(true); setCurrentConversationId(null); setMessages([]); setInputText("");
+            setSidebarOpen(false); setIsOpening(false); setTemporary(true); setCurrentConversationId(null); setMessages([]); setInputText("");
           }}><Icon name="shield" /> Temporary chat</button>
           {temporary && <p className="px-3 py-2 text-xs text-slate-500" role="status">Temporary chat. Messages disappear when you leave or refresh. Odin does not save their content; the AI provider may retain data under its policy. Usage limits still apply.</p>}
 
@@ -469,28 +495,26 @@ export default function AppShell() {
               <p className="text-xs text-slate-400">No conversations yet.<br />Hit <strong>+</strong> to start one.</p>
             </div>
           )}
-          {conversations.filter(conv => (conv.title || "Untitled Chat").toLowerCase().includes(conversationSearch.toLowerCase())).map((conv) => (
+          {conversations.filter((conv) => (conv.title || "Untitled Chat").toLowerCase().includes(conversationSearch.toLowerCase())).map((conv) => (
             <div
               key={conv.id}
-              role="button" tabIndex={0} aria-label={`Open ${conv.title || "conversation"}`} aria-current={conv.id === currentConversationId ? "true" : undefined}
-              onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); void selectConversation(conv.id); } }}
-              onClick={() => selectConversation(conv.id)}
               className={`flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
                 conv.id === currentConversationId
                   ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-500/20"
                   : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
               }`}
             >
-              <Icon name="chat" /><span className="truncate flex-1 pr-2">
+              <Icon name="chat" /><button type="button" disabled={isLoading} onClick={() => void selectConversation(conv.id)} aria-current={conv.id === currentConversationId ? "page" : undefined} className="conversation-select truncate flex-1 pr-2 text-left">
                 {conv.title || "Untitled Chat"}
-              </span>
+              </button>
 
               <div className="flex items-center gap-1 opacity-80">
                 <button
                   type="button"
+                  disabled={isLoading}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void handleRenameConversation(conv.id);
+                    setRenameTarget(conv);
                   }}
                   className="rounded-md p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-900"
                   aria-label={`Rename ${conv.title || "conversation"}`}
@@ -512,6 +536,7 @@ export default function AppShell() {
 
                 <button
                   type="button"
+                  disabled={isLoading}
                   onClick={(event) => {
                     event.stopPropagation();
                     void handleDeleteConversation(conv.id);
@@ -539,6 +564,14 @@ export default function AppShell() {
               </div>
             </div>
           ))}
+          {conversationSearch && !conversations.some((conversation) => (conversation.title || "Untitled Chat").toLowerCase().includes(conversationSearch.toLowerCase())) && <p className="search-empty">No matching conversations.</p>}
+        </div>
+
+        <div className="daily-usage-card" aria-label="Daily message usage">
+          <div className="usage-card-top"><span>DAILY MESSAGES</span><span className="usage-spark">↗</span></div>
+          <div className="usage-number">{usage ? usage.messages_today : "—"}<small> / {usage ? usage.daily_message_cap : "—"}</small></div>
+          <div className="usage-track" role="progressbar" aria-label="Daily messages used" aria-valuenow={usage ? Math.min(usage.messages_today, usage.daily_message_cap) : undefined} aria-valuemin={0} aria-valuemax={usage?.daily_message_cap ?? 100} aria-valuetext={usage ? `${usage.messages_today} of ${usage.daily_message_cap} messages used` : "Usage unavailable"}><span style={{ width: `${usagePercent}%` }} /></div>
+          <p>{usage ? `${Math.max(0, usage.daily_message_cap - usage.messages_today)} messages left today · resets at 00:00 UTC` : "Usage will appear when available"}</p>
         </div>
 
         {/* Footer / Logout */}
@@ -575,14 +608,29 @@ export default function AppShell() {
               {temporary ? "Temporary conversation" : conversations.find(conv => conv.id === currentConversationId)?.title || "Advisor"}
             </h2>
           </div>
+          <div className="header-actions"><button type="button" className="subtle-button" onClick={() => setShowQuestions(!showQuestions)} aria-expanded={showQuestions}>Ideas</button><button type="button" className="subtle-button" onClick={exportConversation} disabled={!messages.length || isLoading || isOpening}>Export chat</button></div>
           <span className="header-badge">{temporary ? "Not saved" : "Advisor workspace"}</span>
         </header>
 
         {/* Messages Area */}
         <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-gradient-to-b from-white to-slate-50/50">
           <div className="flex flex-col space-y-6 max-w-3xl mx-auto pb-4">
-            {(messages.length === 0 || (messages.length === 1 && messages[0].content === "Hello! Your advisor session is ready. How can I assist you today?")) && <section className="chat-welcome"><OdinMark /><h1>What’s on your mind?</h1><p>A little clarity goes a long way.<br />Start a conversation with your advisor.</p><div className="prompt-options">{["Help me think through a decision", "Explain a complex topic", "Help me plan my next steps"].map(prompt => <button key={prompt} onClick={() => setInputText(prompt)}>{prompt}<Icon name="plus" /></button>)}</div></section>}
-            {messages.filter(msg => msg.content !== "Hello! Your advisor session is ready. How can I assist you today?").map((msg, index) => (
+            {(messages.length === 0 || showQuestions) && !isLoading && !isOpening && (
+              <section className="chat-welcome">
+                <div className="welcome-eyebrow"><span /> YOUR THINKING PARTNER</div>
+                <h1>Make progress, <em>one clear step</em> at a time.</h1>
+                <p>Plan your fellowship work, work through a blocker, or find a better way to study. Start with a question below or write your own.</p>
+                <div className="prompt-options">
+                  {STARTER_QUESTIONS.map(({ category, question }) => (
+                    <button key={category} type="button" className="starter-question" disabled={isCreating} onClick={() => { setShowQuestions(false); void handleSendMessage(question); }}>
+                      <span>{category}</span><strong>{question}</strong><i aria-hidden="true">↗</i>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+            {isOpening && <p role="status" className="loading-copy">Opening your conversation…</p>}
+            {messages.map((msg, index) => (
               <div
                 key={index}
                 className={`flex items-start gap-4 animate-fade-in ${msg.role === "user" ? "flex-row-reverse space-x-reverse" : ""}`}
@@ -612,6 +660,7 @@ export default function AppShell() {
                       <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
                         {String(msg.content || "")}
                       </ReactMarkdown>
+                      <button type="button" className="copy-response" onClick={() => void copyMessage(msg.content)}>Copy response</button>
                     </div>
                   ) : (
                     msg.content
@@ -649,14 +698,14 @@ export default function AppShell() {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isLoading || (!temporary && !currentConversationId)}
+              disabled={isLoading || isOpening || isCreating}
               placeholder="Ask your advisor anything..."
               className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 pl-6 pr-14 py-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 transition-colors shadow-inner disabled:opacity-50"
             />
             <button
-              onClick={handleSendMessage}
+              onClick={() => void handleSendMessage()}
               disabled={
-                isLoading || !inputText.trim() || (!temporary && !currentConversationId)
+                isLoading || isOpening || isCreating || !inputText.trim()
               }
               className="absolute right-3 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-500 transition-colors shadow-sm hover:shadow disabled:opacity-40 disabled:bg-slate-300 disabled:shadow-none cursor-pointer"
               aria-label={isLoading ? "Sending…" : "Send message"}

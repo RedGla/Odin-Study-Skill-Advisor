@@ -1,0 +1,36 @@
+.rename-dialog { margin: auto; width: min(440px,calc(100vw - 32px)); padding: 28px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--ink); box-shadow: 0 30px 80px #261c1840; }
+.rename-dialog::backdrop { background: #261c1880; backdrop-filter: blur(3px); }
+.dialog-eyebrow { color: var(--accent); font-size: 10px; letter-spacing: .15em; font-weight: 800; }
+.rename-dialog h2 { margin: 8px 0 20px; font-size: 23px; letter-spacing: -.03em; }
+.rename-dialog label { display: block; margin-bottom: 9px; font-size: 13px; color: var(--muted); }
+.rename-dialog input { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.subtle-button { border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; color: var(--muted); background: transparent; font-size: 12px; }
+.subtle-button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.subtle-button:disabled { opacity: .45; }
+.chat-search { margin: 0 12px 12px; }
+.chat-search input { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; font-size: 12px; }
+.search-empty,.loading-copy { padding: 15px; color: var(--muted); font-size: 13px; }
+.conversation-select { border: 0; background: transparent; min-width: 0; color: inherit; }
+.copy-response { display: block; margin-top: 12px; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
+.copy-response:hover { color: var(--accent); }
+.composer-note { max-width: 768px; margin: 9px auto 0; color: var(--muted); font-size: 10px; text-align: center; line-height: 1.5; }
+
+/* Integrate the usage and study tools with the existing workspace theme. */
+.rename-dialog input { background: var(--canvas); color: var(--ink); }
+.daily-usage-card { margin: 12px 16px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.usage-card-top { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; font-weight: 700; }
+.usage-number { margin: 8px 0; font-size: 24px; font-weight: 700; }
+.usage-number small { font-size: 13px; color: var(--muted); }
+.usage-track { height: 4px; background: var(--line); overflow: hidden; border-radius: 3px; }
+.usage-track span { display: block; height: 100%; background: var(--accent); }
+.daily-usage-card p { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.sidebar-label { padding: 4px 12px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.welcome-eyebrow { color: var(--muted); font-size: 11px; }
+.chat-welcome h1 em { font-style: normal; }
+.odin-shell .prompt-options .starter-question { text-align: left; }
+@media (max-width: 760px) {
+  .header-actions { flex-wrap: wrap; }
+  .odin-shell > main > header { height: auto; min-height: 64px; flex-wrap: wrap; gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+}

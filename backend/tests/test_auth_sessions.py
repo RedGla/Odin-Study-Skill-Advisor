@@ -15,7 +15,7 @@ def test_login_uses_opaque_server_session_and_logout_invalidates(client, db, mon
     row = db.query(models.Session).one()
     assert row.token_hash != cookie
     assert client.get("/auth/me").status_code == 200
-    assert client.post("/auth/logout").status_code == 200
+    assert client.post("/auth/logout", headers={"Origin": "http://localhost:5173"}).status_code == 200
     assert client.get("/auth/me").status_code == 401
 
 def test_registration_rejects_short_password(client):
