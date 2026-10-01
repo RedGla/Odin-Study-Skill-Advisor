@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import axios from "axios";
 import { Link } from "react-router-dom";
 import { apiClient } from "../api/client";
+
+import WorkspaceNav from "../components/WorkspaceNav";
+import { Icon } from "../components/Brand";
 
 interface UsageMetric {
   id: string;
   email: string;
   role: string;
+  is_active: boolean;
+  email_verified: boolean;
   created_at: string | null;
   messages_today: number;
   tokens_today: number;
@@ -34,7 +40,7 @@ interface AdminMessage {
   est_cost: number;
   created_at: string | null;
 }
-interface AdminConfig { daily_message_cap: number; daily_token_cap: number; rate_limit_requests: number; rate_limit_window_seconds: number; }
+interface AdminConfig { daily_message_cap: number; daily_token_cap: number; rate_limit_requests: number; rate_limit_window_seconds: number; registration_enabled: boolean; chat_enabled: boolean; }
 interface AdminEvent { id: string; created_at: string | null; event: string; status: string | null; user_id: string | null; user_email: string | null; conversation_id: string | null; prompt_tokens: number | null; completion_tokens: number | null; estimated_cost: number | null; reason: string | null; }
 
 // ---------------------------------------------------------------------------
@@ -118,12 +124,12 @@ function SortableHeader<K extends string>({
       className={`group cursor-pointer select-none px-6 py-4 font-semibold transition-colors hover:text-blue-600 ${
         alignRight ? "text-right" : ""
       } ${active ? "text-blue-600" : ""}`}
-      onClick={() => onSort(sortKey)}
+      aria-sort={active ? (currentSort.direction === "asc" ? "ascending" : "descending") : "none"}
     >
-      <span className="inline-flex items-center gap-0.5">
+      <button type="button" onClick={() => onSort(sortKey)} className="inline-flex items-center gap-0.5">
         {label}
         <SortIndicator active={active} direction={currentSort.direction} />
-      </span>
+      </button>
     </th>
   );
 }
@@ -171,6 +177,10 @@ export default function Admin() {
   const [conversationMessages, setConversationMessages] = useState<AdminMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [config, setConfig] = useState<AdminConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [busyUser, setBusyUser] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [serviceStatus, setServiceStatus] = useState<{database: string; active_sessions: number; google_configured: boolean; email_configured: boolean; secure_cookies: boolean} | null>(null);
   const [configSaved, setConfigSaved] = useState(false);
   const [events, setEvents] = useState<AdminEvent[]>([]);
 
@@ -189,12 +199,14 @@ export default function Admin() {
     setError(null);
 
     try {
-      const [usageResponse, conversationsResponse, configResponse, eventsResponse] = await Promise.all([
+      const [usageResponse, conversationsResponse, configResponse, eventsResponse, statusResponse] = await Promise.all([
         apiClient.get<UsageMetric[]>("/admin/usage"),
         apiClient.get<ConversationSummary[]>("/admin/conversations"),
         apiClient.get<AdminConfig>("/admin/config"),
         apiClient.get<AdminEvent[]>("/admin/events?limit=50"),
+        apiClient.get("/admin/status"),
       ]);
+      setServiceStatus(statusResponse.data);
       setMetrics(usageResponse.data);
       setConversations(conversationsResponse.data);
       setConfig(configResponse.data);
@@ -207,10 +219,32 @@ export default function Admin() {
   }, []);
 
   const saveConfig = async () => {
-    if (!config) return;
-    await apiClient.put("/admin/config", config);
-    setConfigSaved(true);
-    window.setTimeout(() => setConfigSaved(false), 2000);
+    if (!config || saving) return;
+    setSaving(true); setError(null); setConfigSaved(false);
+    try {
+      const { data } = await apiClient.put("/admin/config", config);
+      setConfig(data); setConfigSaved(true);
+    } catch (err) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      setError(typeof detail === "string" ? detail : "Could not save rules. Use positive whole numbers within the allowed limits.");
+    } finally { setSaving(false); }
+  };
+
+  const manageUser = async (user: UsageMetric, action: "status" | "sessions") => {
+    if (busyUser) return;
+    if (!window.confirm(action === "sessions" ? `Sign out every session for ${user.email}?` : `${user.is_active ? "Suspend" : "Reactivate"} ${user.email}?`)) return;
+    setBusyUser(user.id); setError(null);
+    try {
+      if (action === "sessions") await apiClient.post(`/admin/users/${user.id}/revoke-sessions`);
+      else await apiClient.patch(`/admin/users/${user.id}`, { is_active: !user.is_active });
+      await loadUsage();
+    } catch { setError("The user update failed. Refresh and try again."); }
+    finally { setBusyUser(null); }
+  };
+
+  const logout = async () => {
+    try { await apiClient.post("/auth/logout"); window.location.assign("/login"); }
+    catch { setError("Could not sign out. Please try again."); }
   };
 
   const openConversation = async (conversation: ConversationSummary) => {
@@ -237,8 +271,8 @@ export default function Admin() {
   // Sorted data (derived — no extra state needed)
   const sortedMetrics = useMemo(
     () =>
-      [...metrics].sort((a, b) => compare(a, b, usageSort.key, usageSort.direction)),
-    [metrics, usageSort],
+      [...metrics].filter(user => user.email.toLowerCase().includes(search.toLowerCase())).sort((a, b) => compare(a, b, usageSort.key, usageSort.direction)),
+    [metrics, usageSort, search],
   );
 
   const sortedConversations = useMemo(
@@ -248,27 +282,25 @@ export default function Admin() {
   );
 
   return (
-    <main className="min-h-full bg-slate-50 p-6 md:p-10">
-      <div className="mx-auto max-w-6xl">
+    <div className="admin-page"><WorkspaceNav admin /><main className="admin-main"><div className="page-topbar">Workspace <span>/</span> Operations</div>
+      <div className="admin-content">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">
-              Operations
-            </p>
             <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
-              Usage overview
+              Operations
             </h1>
             <p className="mt-2 text-sm text-slate-500">
-              Completed advisor usage aggregated by user.
+              Manage accounts, monitor usage, and control application rules.
             </p>
           </div>
           <div className="flex items-center gap-3">
             <Link
-              to="/"
+              to="/settings"
               className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-300 hover:text-blue-700"
             >
-              ← Back to Chat
+              <Icon name="settings" /> Account settings
             </Link>
+            <button onClick={logout} className="rounded-lg border px-4 py-2 text-sm">Sign out</button>
             <button
               type="button"
               onClick={loadUsage}
@@ -289,18 +321,25 @@ export default function Admin() {
           </div>
         )}
 
+        {serviceStatus && <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Service status">
+          {[["Database", serviceStatus.database], ["Active sessions", serviceStatus.active_sessions], ["Google sign-in", serviceStatus.google_configured ? "Configured" : "Setup required"], ["Account emails", serviceStatus.email_configured ? "Configured" : "Setup required"]].map(([label, value]) => <div key={label} className="rounded-xl border bg-white p-4"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900">{value}</p></div>)}
+        </section>}
         {config && (
           <section className="mb-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="font-semibold text-slate-900">Usage caps and rate limits</h2>
-            <p className="mt-1 text-sm text-slate-500">These settings apply to new requests immediately. Google Docs remains the prompt control plane.</p>
+            <h2 className="font-semibold text-slate-900">Application rules</h2>
+            <p className="mt-1 text-sm text-slate-500">Rules apply to new requests immediately. Pausing chat keeps saved conversations readable.</p>
+            <div className="mt-4 flex flex-wrap gap-5 text-sm">
+              <label><input type="checkbox" checked={config.registration_enabled} onChange={event => {setConfig({...config, registration_enabled: event.target.checked}); setConfigSaved(false);}} /> Allow new registrations</label>
+              <label><input type="checkbox" checked={config.chat_enabled} onChange={event => {setConfig({...config, chat_enabled: event.target.checked}); setConfigSaved(false);}} /> Allow new chat messages</label>
+            </div>
             <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {([['daily_message_cap', 'Daily messages'], ['daily_token_cap', 'Daily tokens'], ['rate_limit_requests', 'Requests per window'], ['rate_limit_window_seconds', 'Window seconds']] as const).map(([key, label]) => (
                 <label key={key} className="text-sm font-medium text-slate-700">{label}
-                  <input type="number" min="1" value={config[key]} onChange={(event) => setConfig({ ...config, [key]: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+                  <input type="number" min="1" value={config[key]} onChange={(event) => { setConfig({ ...config, [key]: Number(event.target.value) }); setConfigSaved(false); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
                 </label>
               ))}
             </div>
-            <button type="button" onClick={() => void saveConfig()} className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">{configSaved ? "Saved" : "Save limits"}</button>
+            <button type="button" disabled={saving} onClick={() => void saveConfig()} className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">{saving ? "Saving…" : configSaved ? "Saved" : "Save rules"}</button>
           </section>
         )}
 
@@ -309,8 +348,16 @@ export default function Admin() {
           <div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200 text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-6 py-3">Time</th><th className="px-6 py-3">Event</th><th className="px-6 py-3">User</th><th className="px-6 py-3">Status / reason</th><th className="px-6 py-3 text-right">Usage</th></tr></thead><tbody className="divide-y divide-slate-100">{events.map((item) => <tr key={item.id}><td className="whitespace-nowrap px-6 py-3 text-slate-500">{item.created_at ? new Date(item.created_at).toLocaleString() : "—"}</td><td className="px-6 py-3 font-medium text-slate-800">{item.event}</td><td className="px-6 py-3 text-slate-500">{item.user_email || item.user_id || "system"}</td><td className="px-6 py-3 text-slate-500">{item.status || "—"}{item.reason ? ` · ${item.reason}` : ""}</td><td className="px-6 py-3 text-right text-xs text-slate-500">{item.prompt_tokens ?? 0} + {item.completion_tokens ?? 0}{item.estimated_cost != null ? ` · $${item.estimated_cost.toFixed(4)}` : ""}</td></tr>)}{!events.length && <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">No operational events found.</td></tr>}</tbody></table></div>
         </section>
 
+        <section className="my-8 rounded-xl border bg-white p-6">
+          <h2 className="font-semibold text-slate-900">Account management</h2>
+          <label className="mt-4 block text-sm text-slate-600">Search accounts<input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by email" className="mt-1 w-full rounded-lg border px-3 py-2" /></label>
+          <div className="mt-4 max-h-96 overflow-auto divide-y">{sortedMetrics.map(user => <div key={user.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div><p className="font-medium text-slate-800">{user.email}</p><p className="text-xs text-slate-500">{user.role} · {user.is_active ? "Active" : "Suspended"} · {user.email_verified ? "Email verified" : "Verification pending"}</p></div>
+            <div className="flex gap-3 text-sm"><button disabled={busyUser !== null} onClick={() => void manageUser(user, "sessions")} className="rounded-lg border px-3 py-2 disabled:opacity-50">Revoke sessions</button>{user.role !== "admin" && <button disabled={busyUser !== null} onClick={() => void manageUser(user, "status")} className="rounded-lg border px-3 py-2 disabled:opacity-50">{user.is_active ? "Suspend" : "Reactivate"}</button>}</div>
+          </div>)}</div>
+        </section>
         {/* ---- Usage metrics table ---- */}
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"><div className="border-b px-6 py-4"><h2 className="font-semibold">Usage by account</h2><p className="mt-1 text-sm text-slate-500">Daily activity and estimated spend across the workspace.</p></div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
@@ -448,6 +495,6 @@ export default function Admin() {
           </section>
         )}
       </div>
-    </main>
+    </main></div>
   );
 }

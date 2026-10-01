@@ -52,6 +52,14 @@ with patch("dotenv.load_dotenv", return_value=False):
 
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database():
+    # Supabase API roles referenced by the deployed hardening migration.
+    # Test databases are disposable and the test owner is a local superuser.
+    with engine.begin() as connection:
+        connection.execute(text("""DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
+        END $$"""))
     config = Config(str(BACKEND_DIR / "alembic.ini"))
     command.upgrade(config, "head")
     yield
@@ -61,7 +69,10 @@ def migrated_database():
 @pytest.fixture(autouse=True)
 def isolated_integrations(monkeypatch, migrated_database):
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE messages, conversations, usage_counters, users CASCADE"))
+        connection.execute(text("TRUNCATE messages, conversations, usage_counters, users, app_config, auth_tokens, auth_rate_limits CASCADE"))
+    import auth_security
+    monkeypatch.setattr(auth_security, "mail_configured", lambda: True)
+    monkeypatch.setattr(auth_security, "send_account_email", lambda *args: None)
     docs_service._cache.clear()
     limits._request_log.clear()
     monkeypatch.setattr(docs_service, "_cache_lock", asyncio.Lock())
@@ -91,5 +102,5 @@ def db() -> Session:
 
 @pytest.fixture
 def client():
-    with TestClient(app) as test_client:
+    with TestClient(app, headers={"Origin": "http://localhost:5173"}) as test_client:
         yield test_client

@@ -6,6 +6,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 
+import { Icon, OdinMark } from "./Brand";
+
 interface Message {
   role: "user" | "ai";
   content: string;
@@ -33,7 +35,12 @@ export default function AppShell() {
   const [isLoading, setIsLoading] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isDark, setIsDark] = useState(() => (localStorage.getItem("odin-theme") || "light") === "dark");
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [temporary, setTemporary] = useState(false);
+  const initialized = useRef(false);
+  const busy = useRef(false);
+  const selection = useRef(0);
 
   // Custom Toast State
   const [toast, setToast] = useState<{
@@ -57,12 +64,7 @@ export default function AppShell() {
     return () => window.removeEventListener("odin-theme-change", syncTheme);
   }, []);
 
-  // Fetch current user role for conditional admin link
-  useEffect(() => {
-    apiClient.get("/auth/me")
-      .then(({ data }) => setUserRole(data.role))
-      .catch(() => { /* role stays null — admin link won't render */ });
-  }, []);
+
 
   useEffect(() => {
     document.documentElement.dataset.theme = isDark ? "dark" : "light";
@@ -71,7 +73,7 @@ export default function AppShell() {
 
   // Auto-scroll whenever messages or loading state changes
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
   }, [messages, isLoading]);
 
   // Auto-hide toast after 3 seconds
@@ -83,9 +85,16 @@ export default function AppShell() {
   }, [toast]);
 
   const selectConversation = useCallback(async (id: string) => {
-    setCurrentConversationId(id);
+    if (busy.current) return;
+    const requestId = ++selection.current;
+    setSidebarOpen(false);
+    setTemporary(false);
+    setCurrentConversationId(null);
+    setMessages([]);
     try {
       const response = await apiClient.get(`/conversations/${id}/messages`);
+      if (requestId !== selection.current) return;
+      setCurrentConversationId(id);
       const loadedMessages = response.data.map((msg: ApiMessage) => ({
         role:
           msg.role?.toLowerCase() === "user" ||
@@ -111,7 +120,7 @@ export default function AppShell() {
   }, []);
 
   const createNewConversation = useCallback(async () => {
-    if (isCreating) return;
+    if (isCreating || busy.current) return;
     setIsCreating(true);
 
     try {
@@ -133,6 +142,7 @@ export default function AppShell() {
       const response = await apiClient.get("/conversations");
       const convs = response.data;
       setConversations(convs);
+      if (selection.current > 0) return;
 
       if (convs.length > 0 && !currentConversationId) {
         selectConversation(convs[0].id);
@@ -196,6 +206,7 @@ export default function AppShell() {
   const confirmDeleteConversation = useCallback(async () => {
     if (!deleteDialog) return;
 
+    if (busy.current) return;
     const { conversationId } = deleteDialog;
 
     try {
@@ -228,6 +239,8 @@ export default function AppShell() {
   // Load conversations on mount
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (initialized.current) return;
+      initialized.current = true;
       void fetchConversations();
     }, 0);
     return () => window.clearTimeout(timer);
@@ -243,7 +256,8 @@ export default function AppShell() {
   };
 
   const handleSendMessage = async () => {
-    if (!inputText.trim() || !currentConversationId) return;
+    if (busy.current || !inputText.trim() || (!temporary && !currentConversationId)) return;
+    busy.current = true;
 
     const userMessage = inputText;
     setInputText("");
@@ -253,10 +267,8 @@ export default function AppShell() {
 
     try {
       const response = await apiClient.post(
-        `/conversations/${currentConversationId}/messages`,
-        {
-          content: userMessage,
-        },
+        temporary ? "/temporary-chat/messages" : `/conversations/${currentConversationId}/messages`,
+        temporary ? { messages: [...messages.slice(-49).map(message => ({ role: message.role === "user" ? "user" : "assistant", content: message.content })), { role: "user", content: userMessage }] } : { content: userMessage },
       );
 
       setMessages((prev) => [
@@ -267,11 +279,14 @@ export default function AppShell() {
         },
       ]);
     } catch (error) {
-      console.error("Failed to send message", error);
+      if (temporary) {
+        setMessages(previous => previous.slice(0, -1));
+        setInputText(userMessage);
+      }
       let message = "Network error. Failed to reach the advisor.";
       if (axios.isAxiosError(error)) {
         const detail = error.response?.data?.detail;
-        if (detail?.reason === "cap") {
+        if (detail?.reason === "cap" || detail?.reason === "token_cap") {
           message = detail.message;
         } else if (detail?.reason === "rate") {
           message = detail.message;
@@ -284,11 +299,12 @@ export default function AppShell() {
         type: "error",
       });
     } finally {
+      busy.current = false;
       setIsLoading(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
@@ -296,11 +312,11 @@ export default function AppShell() {
   };
 
   return (
-    <div className={`odin-shell ${isDark ? "is-dark" : "is-light"}`}>
+    <div onKeyDown={event => { if (event.key === "Escape") { setSidebarOpen(false); setDeleteDialog(null); } }} className={`odin-shell ${isDark ? "is-dark" : "is-light"} ${sidebarOpen ? "sidebar-open" : ""}`}>
       {/* Toast Notification Banner */}
       {toast && (
         <div
-          className={`absolute top-4 right-8 px-5 py-3 rounded-xl shadow-lg transform transition-all z-50 flex items-center gap-3 animate-fade-in ${
+          className={`absolute top-4 right-8 px-5 py-3 rounded-xl shadow-lg transform transition-colors z-50 flex items-center gap-3 animate-fade-in ${
             toast.type === "error"
               ? "bg-red-900 text-white shadow-red-900/20"
               : "bg-slate-900 text-white"
@@ -331,7 +347,7 @@ export default function AppShell() {
           onClick={() => setDeleteDialog(null)}
         >
           <div
-            className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#1d2a26]/95 p-6 shadow-[0_24px_70px_rgba(15,23,42,0.45)] text-white"
+            role="dialog" aria-modal="true" aria-label="Delete conversation" className="delete-dialog w-full max-w-md rounded-[28px] border border-white/10 bg-[#1d2a26]/95 p-6 shadow-[0_24px_70px_rgba(15,23,42,0.45)] text-white"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-5 flex items-center gap-3">
@@ -388,17 +404,18 @@ export default function AppShell() {
         </div>
       )}
 
+      {sidebarOpen && <button className="sidebar-scrim" aria-label="Dismiss navigation" onClick={() => setSidebarOpen(false)} />}
       {/* Sidebar - Left Pane */}
       <aside className="w-72 flex-shrink-0 flex-col border-r border-slate-200/80 bg-white shadow-sm flex z-40">
         <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <h1 className="font-semibold text-slate-900 tracking-tight text-sm uppercase">
-            <span className="odin-mark">✦</span> Odin
+            <OdinMark /> <span>odin</span>
           </h1>
           <button
             onClick={createNewConversation}
-            disabled={isCreating}
-            className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-all shadow-sm hover:shadow disabled:opacity-50"
-            title="New Chat"
+            disabled={isCreating || isLoading}
+            className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors shadow-sm hover:shadow disabled:opacity-50"
+            title="New conversation" aria-label="New conversation"
           >
             {isCreating ? (
               <svg
@@ -427,17 +444,21 @@ export default function AppShell() {
           </button>
         </div>
 
+        <button className="mobile-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><Icon name="close" /></button>
         <div className="sidebar-tools">
           <button type="button" onClick={() => navigate("/settings")} className="sidebar-tool">
-            <span>⚙</span> Settings
+            <Icon name="settings" /> Settings
           </button>
-          {userRole === "admin" && (
-            <button type="button" onClick={() => navigate("/admin")} className="sidebar-tool">
-              <span>📊</span> Admin Panel
-            </button>
-          )}
+          <button type="button" disabled={isLoading || isCreating} className="sidebar-tool" onClick={() => {
+            if (busy.current) return;
+            ++selection.current;
+            setSidebarOpen(false); setTemporary(true); setCurrentConversationId(null); setMessages([]); setInputText("");
+          }}><Icon name="shield" /> Temporary chat</button>
+          {temporary && <p className="px-3 py-2 text-xs text-slate-500" role="status">Temporary chat. Messages disappear when you leave or refresh. Odin does not save their content; the AI provider may retain data under its policy. Usage limits still apply.</p>}
+
         </div>
 
+        <div className="conversation-search"><label htmlFor="conversation-search">Conversations</label><input id="conversation-search" type="search" placeholder="Find a conversation…" value={conversationSearch} onChange={event => setConversationSearch(event.target.value)} /></div>
         {/* Dynamic Conversation List */}
         <div className="flex-1 overflow-y-auto p-3 space-y-1.5 scrollbar-thin">
           {conversations.length === 0 && !isCreating && (
@@ -448,17 +469,19 @@ export default function AppShell() {
               <p className="text-xs text-slate-400">No conversations yet.<br />Hit <strong>+</strong> to start one.</p>
             </div>
           )}
-          {conversations.map((conv) => (
+          {conversations.filter(conv => (conv.title || "Untitled Chat").toLowerCase().includes(conversationSearch.toLowerCase())).map((conv) => (
             <div
               key={conv.id}
+              role="button" tabIndex={0} aria-label={`Open ${conv.title || "conversation"}`} aria-current={conv.id === currentConversationId ? "true" : undefined}
+              onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); void selectConversation(conv.id); } }}
               onClick={() => selectConversation(conv.id)}
-              className={`flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+              className={`flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
                 conv.id === currentConversationId
                   ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-500/20"
                   : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
               }`}
             >
-              <span className="truncate flex-1 pr-2">
+              <Icon name="chat" /><span className="truncate flex-1 pr-2">
                 {conv.title || "Untitled Chat"}
               </span>
 
@@ -547,17 +570,19 @@ export default function AppShell() {
         {/* Header */}
         <header className="h-16 border-b border-slate-100 flex items-center justify-between px-8 bg-white/80 backdrop-blur-md z-10 sticky top-0">
           <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
+            <button className="mobile-menu" aria-label="Open navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><Icon name="menu" /></button>
             <h2 className="text-slate-800 font-semibold tracking-tight">
-              <span className="odin-mark">✦</span> Odin · Chat Advisor
+              {temporary ? "Temporary conversation" : conversations.find(conv => conv.id === currentConversationId)?.title || "Advisor"}
             </h2>
           </div>
+          <span className="header-badge">{temporary ? "Not saved" : "Advisor workspace"}</span>
         </header>
 
         {/* Messages Area */}
         <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-gradient-to-b from-white to-slate-50/50">
           <div className="flex flex-col space-y-6 max-w-3xl mx-auto pb-4">
-            {messages.map((msg, index) => (
+            {(messages.length === 0 || (messages.length === 1 && messages[0].content === "Hello! Your advisor session is ready. How can I assist you today?")) && <section className="chat-welcome"><OdinMark /><h1>What’s on your mind?</h1><p>A little clarity goes a long way.<br />Start a conversation with your advisor.</p><div className="prompt-options">{["Help me think through a decision", "Explain a complex topic", "Help me plan my next steps"].map(prompt => <button key={prompt} onClick={() => setInputText(prompt)}>{prompt}<Icon name="plus" /></button>)}</div></section>}
+            {messages.filter(msg => msg.content !== "Hello! Your advisor session is ready. How can I assist you today?").map((msg, index) => (
               <div
                 key={index}
                 className={`flex items-start gap-4 animate-fade-in ${msg.role === "user" ? "flex-row-reverse space-x-reverse" : ""}`}
@@ -570,7 +595,7 @@ export default function AppShell() {
                       : "bg-blue-600 text-white shadow-blue-500/20"
                   }`}
                 >
-                  {msg.role === "user" ? "U" : "AI"}
+                  {msg.role === "user" ? "You" : <OdinMark />}
                 </div>
 
                 {/* Bubble */}
@@ -599,7 +624,7 @@ export default function AppShell() {
             {isLoading && (
               <div className="flex items-start gap-4">
                 <div className="h-9 w-9 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-bold text-xs flex-shrink-0 shadow-sm">
-                  AI
+                  <OdinMark />
                 </div>
                 <div className="bg-white border border-slate-200/70 rounded-2xl rounded-tl-sm px-5 py-3.5 text-slate-400 text-sm shadow-sm flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-blue-500 animate-bounce"></span>
@@ -617,21 +642,23 @@ export default function AppShell() {
         {/* Input Bar Area */}
         <div className="p-4 md:p-6 bg-white border-t border-slate-100">
           <div className="max-w-3xl mx-auto relative flex items-center">
-            <input
-              type="text"
+            <textarea
+              rows={2}
+              aria-label="Message your advisor"
+              maxLength={16000}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isLoading || !currentConversationId}
+              disabled={isLoading || (!temporary && !currentConversationId)}
               placeholder="Ask your advisor anything..."
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 pl-6 pr-14 py-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 pl-6 pr-14 py-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 transition-colors shadow-inner disabled:opacity-50"
             />
             <button
               onClick={handleSendMessage}
               disabled={
-                isLoading || !inputText.trim() || !currentConversationId
+                isLoading || !inputText.trim() || (!temporary && !currentConversationId)
               }
-              className="absolute right-3 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-500 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:bg-slate-300 disabled:shadow-none cursor-pointer"
+              className="absolute right-3 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-500 transition-colors shadow-sm hover:shadow disabled:opacity-40 disabled:bg-slate-300 disabled:shadow-none cursor-pointer"
               aria-label={isLoading ? "Sending…" : "Send message"}
             >
               {isLoading ? (
@@ -659,7 +686,7 @@ export default function AppShell() {
                 </svg>
               )}
             </button>
-          </div>
+          </div><p className="composer-help">Enter to send · Shift + Enter for a new line</p>
         </div>
       </main>
     </div>

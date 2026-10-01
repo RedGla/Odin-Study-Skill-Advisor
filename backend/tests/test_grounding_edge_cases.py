@@ -1,3 +1,4 @@
+from tests.helpers import session_token
 """Edge cases for _select_grounding: empty and whitespace-only documents."""
 
 import pytest
@@ -53,7 +54,7 @@ def test_chat_succeeds_with_empty_grounding_document(client, test_user):
     response = client.post(
         "/conversations",
         json={"title": "Grounding Edge"},
-        cookies={"session_user_id": str(test_user.id)},
+        cookies={"session_token": session_token(str(test_user.id))},
     )
     conv_id = response.json()["id"]
 
@@ -67,7 +68,7 @@ def test_chat_succeeds_with_empty_grounding_document(client, test_user):
         resp = client.post(
             f"/conversations/{conv_id}/messages",
             json={"content": "Hello"},
-            cookies={"session_user_id": str(test_user.id)},
+            cookies={"session_token": session_token(str(test_user.id))},
         )
 
     assert resp.status_code == 200
@@ -83,7 +84,7 @@ def test_chat_succeeds_with_whitespace_only_grounding_document(client, test_user
     response = client.post(
         "/conversations",
         json={"title": "Whitespace Grounding"},
-        cookies={"session_user_id": str(test_user.id)},
+        cookies={"session_token": session_token(str(test_user.id))},
     )
     conv_id = response.json()["id"]
 
@@ -97,7 +98,7 @@ def test_chat_succeeds_with_whitespace_only_grounding_document(client, test_user
         resp = client.post(
             f"/conversations/{conv_id}/messages",
             json={"content": "Hi"},
-            cookies={"session_user_id": str(test_user.id)},
+            cookies={"session_token": session_token(str(test_user.id))},
         )
 
     assert resp.status_code == 200

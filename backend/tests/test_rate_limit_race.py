@@ -1,3 +1,4 @@
+from tests.helpers import session_token
 """Concurrent POST /messages must not all pass when the user is at rate-limit minus one.
 
 Mirrors test_cap_race.py but targets the in-memory per-user fixed-window
@@ -51,8 +52,9 @@ async def test_only_one_of_concurrent_requests_succeeds_at_rate_limit(db, monkey
     try:
         with patch("main.generate_llm_response", new=AsyncMock(return_value=llm_reply)):
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                client.cookies.set("session_user_id", user_id)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://localhost:5173"}) as client:
+                client.cookies.set("session_token", session_token(user_id))
+                client.headers["Origin"] = "http://localhost:5173"
 
                 async def send_message() -> int:
                     response = await client.post(

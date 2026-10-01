@@ -1,6 +1,7 @@
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from models import User
+from sqlalchemy import func
 import hashlib, secrets
 from datetime import datetime, timedelta, timezone
 
@@ -13,7 +14,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pw_context.verify(plain_password, hashed_password)
 
 def get_user_by_email(db: Session, email: str):
-    return db.query(User).filter(User.email == email).first()
+    return db.query(User).filter(func.lower(func.trim(User.email)) == normalize_email(email)).first()
 
 SESSION_TTL = timedelta(hours=12)
 
@@ -28,7 +29,7 @@ RESERVED_EMAIL_DOMAINS = {
 
 
 def normalize_email(email: str) -> str:
-    return email.strip().casefold()
+    return email.strip().lower()
 
 
 def is_reserved_email_domain(email: str) -> bool:
@@ -53,7 +54,7 @@ def get_session_user(db: Session, token: str):
     if not row or expires_at <= datetime.now(timezone.utc):
         if row: db.delete(row); db.commit()
         return None
-    return db.query(User).filter_by(id=row.user_id).first()
+    return db.query(User).filter_by(id=row.user_id, is_active=True).first()
 def revoke_session(db: Session, token: str) -> None:
     digest = hashlib.sha256(token.encode()).hexdigest()
     db.query(__import__('models').Session).filter_by(token_hash=digest).delete()

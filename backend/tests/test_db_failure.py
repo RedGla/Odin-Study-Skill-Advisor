@@ -1,3 +1,4 @@
+from tests.helpers import session_token
 """
 DB connection-drop graceful-degradation tests.
 
@@ -50,7 +51,7 @@ def test_db_connection_drop_on_list_conversations(client, test_user):
 
         response = client.get(
             "/conversations",
-            cookies={"session_user_id": str(test_user.id)},
+            cookies={"session_token": session_token(str(test_user.id))},
         )
 
     assert response.status_code == 503
@@ -83,7 +84,7 @@ def test_db_connection_drop_on_get_messages(client, db, test_user):
 
         response = client.get(
             f"/conversations/{conv_id}/messages",
-            cookies={"session_user_id": str(test_user.id)},
+            cookies={"session_token": session_token(str(test_user.id))},
         )
 
     assert response.status_code == 503
@@ -108,7 +109,7 @@ def test_db_connection_drop_on_message_send(client, test_user):
     response = client.post(
         "/conversations",
         json={"title": "DB-drop test"},
-        cookies={"session_user_id": str(test_user.id)},
+        cookies={"session_token": session_token(str(test_user.id))},
     )
     assert response.status_code == 200, response.text
     conv_id = response.json()["id"]
@@ -136,7 +137,7 @@ def test_db_connection_drop_on_message_send(client, test_user):
             response = client.post(
                 f"/conversations/{conv_id}/messages",
                 json={"content": "Hello, will this persist?"},
-                cookies={"session_user_id": str(test_user.id)},
+                cookies={"session_token": session_token(str(test_user.id))},
             )
 
     # 503 distinguishes DB dropout from LLM failure (502) or bad request (4xx)

@@ -113,5 +113,7 @@ Advisor-Console/
 | 1 | **Naive keyword grounding** | Document retrieval uses keyword/BM25-style matching — no vector embeddings. Synonyms or paraphrases may miss relevant context. |
 | 2 | **In-memory rate limiter resets on restart** | The per-user rate-limit window lives in a plain Python dict inside the process. It resets on every `uvicorn --reload` or redeploy. This is an accepted trade-off per the project's Do-Not-Build list (no Redis). |
 | 3 | **Single advisor persona** | There is one system prompt and one grounding document shared by all conversations. Per-user or per-session persona switching is not supported. |
-| 4 | **Simple session-cookie auth** | Authentication uses server-side sessions (cookie + Argon2 password hash). There is no MFA, OAuth, or JWT refresh rotation. |
+| 4 | **Simple session-cookie auth** | Authentication uses server-side sessions (cookie + Argon2 password hash). Google OAuth, verified-email registration and recovery are supported. MFA is not implemented. See docs/AUTH_SETUP.md before deploying. |
 | 5 | **Blocked-request logging via server logs (no in-DB events table)** | Blocked requests emit structured warnings (`request_blocked reason=... user_id=...`) to server logs rather than writing rows to a database events table. This intentional trade-off avoids DB write amplification under abusive bursts while remaining queryable via platform log sinks (e.g., Render/CloudWatch). |
+
+Account security, Google sign-in and temporary-chat rollout: [setup guide](docs/AUTH_SETUP.md).

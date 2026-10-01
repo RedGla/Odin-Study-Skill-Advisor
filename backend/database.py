@@ -15,6 +15,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
+    hide_parameters=True,  # Keep credentials/auth-token payloads out of DB error logs.
     connect_args={"connect_timeout": 5},  # fail fast on unreachable host
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -13,6 +13,7 @@ def create_user(db: Session, *, role: str = "user") -> models.User:
         email=f"test-{uuid.uuid4().hex}@example.com",
         hashed_password=auth.hash_password("password123"),
         role=role,
+        email_verified=True,
     )
     db.add(user)
     db.commit()
@@ -21,7 +22,8 @@ def create_user(db: Session, *, role: str = "user") -> models.User:
 
 
 def auth_client(client: TestClient, user: models.User) -> TestClient:
-    client.cookies.set("session_user_id", str(user.id))
+    client.cookies.set("session_token", session_token(str(user.id)))
+    client.headers["Origin"] = "http://localhost:5173"
     return client
 
 
@@ -39,3 +41,8 @@ def cleanup_user(user_id: str) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def session_token(user_id):
+    with SessionLocal() as db:
+        return auth.create_session(db, str(user_id))

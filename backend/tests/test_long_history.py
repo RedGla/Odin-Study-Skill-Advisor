@@ -1,3 +1,4 @@
+from tests.helpers import session_token
 """Long conversation history must be truncated rather than blowing up the
 OpenRouter payload.  Validates the MAX_HISTORY_MESSAGES trim in main.py."""
 
@@ -62,8 +63,9 @@ async def test_long_history_is_trimmed_and_request_succeeds(db, monkeypatch):
     try:
         with patch("main.generate_llm_response", new=AsyncMock(side_effect=fake_llm)):
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                client.cookies.set("session_user_id", user_id)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://localhost:5173"}) as client:
+                client.cookies.set("session_token", session_token(user_id))
+                client.headers["Origin"] = "http://localhost:5173"
                 resp = await client.post(
                     f"/conversations/{conversation_id}/messages",
                     json={"content": "new message"},

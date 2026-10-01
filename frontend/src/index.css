@@ -1,1 +1,20 @@
 @import "tailwindcss";
+@theme {
+  --color-slate-50: var(--canvas);
+  --color-slate-100: var(--sidebar);
+  --color-slate-200: var(--line);
+  --color-slate-300: var(--line);
+  --color-slate-400: var(--muted);
+  --color-slate-500: var(--muted);
+  --color-slate-600: var(--muted);
+  --color-slate-700: var(--ink);
+  --color-slate-800: var(--ink);
+  --color-slate-900: var(--ink);
+  --color-white: var(--surface);
+  --color-blue-50: var(--accent-soft);
+  --color-blue-100: var(--accent-soft);
+  --color-blue-300: var(--accent);
+  --color-blue-500: var(--accent);
+  --color-blue-600: var(--accent);
+  --color-blue-700: var(--accent);
+}

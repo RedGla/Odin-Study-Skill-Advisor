@@ -1,3 +1,4 @@
+from tests.helpers import session_token
 """Real PostgreSQL admission, rollback, and reconciliation regression tests."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -58,7 +59,8 @@ def snapshot(uid):
 
 def send(client, account):
     uid, cid = account
-    client.cookies.set("session_user_id", uid)
+    if not client.cookies.get("session_token"):
+        client.cookies.set("session_token", session_token(uid))
     return client.post(f"/conversations/{cid}/messages", json={"content": "hello"})
 
 
@@ -89,8 +91,8 @@ async def test_concurrent_admission(account, monkeypatch, iteration, initial, ca
     provider = AsyncMock(return_value=REPLY)
     monkeypatch.setattr(main, "generate_llm_response", provider)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app),
-                                 base_url="http://test") as client:
-        client.cookies.set("session_user_id", uid)
+                                 base_url="http://test", headers={"Origin": "http://localhost:5173"}) as client:
+        client.cookies.set("session_token", session_token(uid))
         responses = await asyncio.wait_for(asyncio.gather(*[
             client.post(f"/conversations/{cid}/messages", json={"content": "hello"})
             for _ in range(2)
@@ -157,6 +159,7 @@ def test_unique_constraint_rejects_duplicate_daily_counter(account):
 
 def test_admission_commit_failure_rolls_back_quota_and_turn(account, client, monkeypatch):
     uid, cid = account
+    client.cookies.set("session_token", session_token(uid))
     provider = AsyncMock(return_value=REPLY)
     monkeypatch.setattr(main, "generate_llm_response", provider)
     with monkeypatch.context() as context:

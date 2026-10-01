@@ -1,12 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException, Response, Request, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, case
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from urllib.parse import urlparse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, cast, Literal
 from datetime import datetime
 import os
@@ -15,15 +16,15 @@ from dotenv import load_dotenv
 from database import SessionLocal, DatabaseOperationalError
 import models
 import auth
-from llm_service import generate_llm_response, estimate_cost, conservative_token_estimate, MAX_COMPLETION_TOKENS, _select_grounding
+import auth_security as security
+import google_oauth
+from llm_service import generate_llm_response, get_chat_completion, estimate_cost, conservative_token_estimate, MAX_COMPLETION_TOKENS, _select_grounding
 import usage_service
 import limits
 import docs_service
 import telemetry_service
 import config_service
 import logging
-import time
-from collections import defaultdict
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,16 +39,30 @@ app = FastAPI()
 
 # Configuration based on environment
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 IS_PROD = os.getenv("ENVIRONMENT", "development") == "production"
 
 # Cookie configuration - can be overridden via env vars
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true" if IS_PROD else "false").lower() == "true"
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "none" if IS_PROD else "lax")
 SESSION_COOKIE = "session_token"
-_login_failures: dict[str, list[float]] = defaultdict(list)
-LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
-LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "300"))
+if IS_PROD and (not COOKIE_SECURE or not FRONTEND_URL.startswith("https://")):
+    raise RuntimeError("Production requires HTTPS and secure session cookies")
+if COOKIE_SAMESITE not in {"lax", "strict", "none"} or (COOKIE_SAMESITE == "none" and not COOKIE_SECURE):
+    raise RuntimeError("Use a valid SameSite policy; SameSite=None requires secure cookies")
+
+
+class OAuthAccessLogFilter(logging.Filter):
+    def filter(self, record):
+        # Uvicorn access-log arguments contain the full callback query string.
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            address, method, path, version, code = record.args
+            if isinstance(path, str) and path.startswith("/auth/google/callback?"):
+                record.args = (address, method, path.split("?", 1)[0], version, code)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(OAuthAccessLogFilter())
 
 # CORS configuration
 ALLOWED_ORIGINS = [FRONTEND_URL]
@@ -56,9 +71,9 @@ if ENVIRONMENT == "development":
     ALLOWED_ORIGINS.extend(["http://localhost:3000", "http://127.0.0.1:5173"])
 
 class OriginProtectionMiddleware(BaseHTTPMiddleware):
-    """Reject cross-site browser mutations carrying an authenticated session."""
+    """Reject cross-site mutations, including unauthenticated login CSRF."""
     async def dispatch(self, request: Request, call_next):
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.cookies.get(SESSION_COOKIE):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
             referer = request.headers.get("referer")
             valid_origin = origin in ALLOWED_ORIGINS
@@ -66,9 +81,15 @@ class OriginProtectionMiddleware(BaseHTTPMiddleware):
             if referer:
                 parsed = urlparse(referer)
                 valid_referer = f"{parsed.scheme}://{parsed.netloc}" in ALLOWED_ORIGINS
-            if not (valid_origin or valid_referer):
+            if not (valid_origin if origin is not None else valid_referer):
                 return JSONResponse(status_code=403, content={"detail": "CSRF origin validation failed"})
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        if IS_PROD:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
 
 app.add_middleware(OriginProtectionMiddleware)
 
@@ -105,17 +126,29 @@ def get_db_or_503():
         db.close()
 
 # Auth Schemas
-class RegisterSchema(BaseModel):
+class EmailSchema(BaseModel):
     email: EmailStr
-    password: str
 
-class LoginSchema(BaseModel):
-    email: EmailStr
-    password: str
+    @field_validator("email", mode="before")
+    @classmethod
+    def trim_email(cls, value):
+        return auth.normalize_email(value) if isinstance(value, str) else value
+
+class RegisterSchema(EmailSchema):
+    password: str = Field(max_length=128)
+
+class LoginSchema(EmailSchema):
+    password: str = Field(max_length=128)
 
 class ChangePasswordSchema(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(max_length=128)
+    new_password: str = Field(max_length=128)
+
+class TokenSchema(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+
+class ResetSchema(TokenSchema):
+    password: str = Field(max_length=128)
 
 # Chat Schemas
 class CreateConversationSchema(BaseModel):
@@ -125,13 +158,34 @@ class RenameConversationSchema(BaseModel):
     title: str
 
 class SendMessageSchema(BaseModel):
-    content: str
+    content: str = Field(min_length=1, max_length=16000)
+
+class TemporaryMessageSchema(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=16000)
+
+class TemporaryChatSchema(BaseModel):
+    messages: list[TemporaryMessageSchema] = Field(min_length=1, max_length=50)
+
+    @field_validator("messages")
+    @classmethod
+    def bounded_history(cls, messages):
+        if sum(len(message.content) for message in messages) > 64000:
+            raise ValueError("Temporary chat context is too long. Start a new temporary chat.")
+        if messages[-1].role != "user":
+            raise ValueError("The final message must be from the user")
+        return messages
 
 class AdminConfigSchema(BaseModel):
-    daily_message_cap: int
-    daily_token_cap: int
-    rate_limit_requests: int
-    rate_limit_window_seconds: int
+    daily_message_cap: int = Field(ge=1, le=100000)
+    daily_token_cap: int = Field(ge=1, le=100000000)
+    rate_limit_requests: int = Field(ge=1, le=1000)
+    rate_limit_window_seconds: int = Field(ge=1, le=86400)
+    registration_enabled: bool = True
+    chat_enabled: bool = True
+
+class AdminUserSchema(BaseModel):
+    is_active: bool
 
 # Serializers
 def serialize_conversation(c: models.Conversation) -> dict:
@@ -159,10 +213,6 @@ def get_current_user(request: Request, db: Session = Depends(get_db_or_503)):
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         user = auth.get_session_user(db, token)
-    elif not IS_PROD and request.cookies.get("session_user_id"):
-        # Test/development compatibility for existing local clients. Production
-        # never accepts a raw user ID as authentication.
-        user = db.query(models.User).filter_by(id=request.cookies["session_user_id"]).first()
     else:
         user = None
     if not user:
@@ -180,75 +230,163 @@ def require_admin(current_user: models.User = Depends(get_current_user)):
 def health_check():
     return {"status": "ok"}
 
+def set_session(response, db, user, request):
+    old_token = request.cookies.get(SESSION_COOKIE)
+    if old_token:
+        auth.revoke_session(db, old_token)
+    token = auth.create_session(db, str(user.id))
+    response.set_cookie(SESSION_COOKIE, token, httponly=True,
+                        samesite=COOKIE_SAMESITE, secure=COOKIE_SECURE,
+                        max_age=int(auth.SESSION_TTL.total_seconds()))
+
+
+def auth_throttle(db, request, email=None):
+    security.throttle(db, f"auth-ip:{request.client.host}", maximum=30)
+    if email:
+        security.throttle(db, f"auth-email:{auth.normalize_email(email)}")
+
+
+@app.get("/auth/options")
+def auth_options():
+    return {"google_enabled": google_oauth.configured(), "email_enabled": security.mail_configured()}
+
+
 @app.post("/auth/register")
-def register(data: RegisterSchema, db: Session = Depends(get_db_or_503)):
+def register(data: RegisterSchema, request: Request, db: Session = Depends(get_db_or_503)):
+    auth_throttle(db, request, data.email)
+    if not config_service.get(db)["registration_enabled"]:
+        raise HTTPException(403, "New registrations are currently paused.")
+    if not security.mail_configured():
+        raise HTTPException(503, "Account email delivery is not configured. Please contact the administrator.")
     email = auth.normalize_email(data.email)
     if auth.is_reserved_email_domain(email):
-        raise HTTPException(
-            status_code=400,
-            detail="Use a real email address; example and test domains are not allowed.",
-        )
-    if len(data.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    existing_user = auth.get_user_by_email(db, email)
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    hashed_pwd = auth.hash_password(data.password)
-    new_user = models.User(email=email, hashed_password=hashed_pwd, role="user")
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return {"message": "User registered successfully", "user_id": new_user.id}
+        raise HTTPException(400, "Use a real email address; example and test domains are not allowed.")
+    security.validate_password(data.password)
+    # Hash even for duplicates to avoid an obvious timing difference.
+    hashed = auth.hash_password(data.password)
+    user = auth.get_user_by_email(db, email)
+    if not user:
+        user = models.User(email=email, hashed_password=hashed, role="user", email_verified=False)
+        db.add(user)
+        try:
+            db.flush()
+            token = security.issue_token(db, "verify", str(user.id))
+            security.send_account_email(email, token, "verify")
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+    return {"message": "If this address can be registered, a verification link has been sent. Check your inbox, or sign in if you already have an account."}
+
+
+_DUMMY_HASH = auth.hash_password("timing-only-not-an-account-password")
 
 @app.post("/auth/login")
-def login(data: LoginSchema, response: Response, db: Session = Depends(get_db_or_503)):
-    email = auth.normalize_email(data.email)
-    now = time.monotonic()
-    failures = [stamp for stamp in _login_failures[email] if stamp > now - LOGIN_WINDOW_SECONDS]
-    if len(failures) >= LOGIN_MAX_FAILURES:
-        raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
-    user = auth.get_user_by_email(db, email)
-    if not user or not auth.verify_password(
-        data.password, cast(str, user.hashed_password)
-    ):
-        failures.append(now); _login_failures[email] = failures
-        raise HTTPException(status_code=400, detail="Invalid credentials")
-    _login_failures.pop(email, None)
-    token = auth.create_session(db, str(user.id))
-    
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=token,
-        httponly=True,
-        samesite=cast(Literal["lax", "strict", "none"], COOKIE_SAMESITE),
-        secure=COOKIE_SECURE,
-        max_age=int(auth.SESSION_TTL.total_seconds()),
-        expires=int(auth.SESSION_TTL.total_seconds()),
-    )
+def login(data: LoginSchema, request: Request, response: Response, db: Session = Depends(get_db_or_503)):
+    auth_throttle(db, request, data.email)
+    user = auth.get_user_by_email(db, data.email)
+    valid = auth.verify_password(data.password, user.hashed_password if user else _DUMMY_HASH)
+    if not user or not valid or not user.is_active:
+        raise HTTPException(400, "Invalid email or password.")
+    if not user.email_verified:
+        raise HTTPException(403, "Verify your email before signing in. Use Resend verification if you need a new link.")
+    set_session(response, db, user, request)
     return {"message": "Logged in successfully", "email": user.email, "role": user.role}
+
 
 @app.post("/auth/logout")
 def logout(request: Request, response: Response, db: Session = Depends(get_db_or_503)):
-    token = request.cookies.get(SESSION_COOKIE)
-    if token:
-        auth.revoke_session(db, token)
-    response.delete_cookie(SESSION_COOKIE)
+    if request.cookies.get(SESSION_COOKIE):
+        auth.revoke_session(db, request.cookies[SESSION_COOKIE])
+    response.delete_cookie(SESSION_COOKIE, secure=COOKIE_SECURE, httponly=True, samesite=COOKIE_SAMESITE)
     return {"message": "Logged out successfully"}
+
 
 @app.get("/auth/me")
 def get_me(current_user: models.User = Depends(get_current_user)):
-    return {"id": current_user.id, "email": current_user.email, "role": current_user.role}
+    return {"id": current_user.id, "email": current_user.email, "role": current_user.role,
+            "google_linked": bool(current_user.google_subject)}
+
 
 @app.post("/auth/change-password")
-def change_password(data: ChangePasswordSchema, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db_or_503)):
-    if not auth.verify_password(data.current_password, cast(str, current_user.hashed_password)):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
-    if len(data.new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+def change_password(data: ChangePasswordSchema, request: Request, response: Response,
+                    current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db_or_503)):
+    auth_throttle(db, request, current_user.email)
+    if not auth.verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(400, "Current password is incorrect")
+    security.validate_password(data.new_password)
     current_user.hashed_password = auth.hash_password(data.new_password)
+    db.query(models.Session).filter_by(user_id=current_user.id).delete()
+    db.query(models.AuthToken).filter_by(user_id=current_user.id).delete()
     db.commit()
-    return {"message": "Password updated successfully"}
+    set_session(response, db, current_user, request)
+    return {"message": "Password updated; other sessions have been signed out."}
+
+
+@app.post("/auth/verify-email")
+def verify_email(data: TokenSchema, request: Request, db: Session = Depends(get_db_or_503)):
+    auth_throttle(db, request)
+    token = security.consume_token(db, data.token, "verify")
+    user = db.get(models.User, token.user_id)
+    user.email_verified = True
+    db.query(models.AuthToken).filter_by(user_id=user.id, purpose="verify").delete()
+    db.commit()
+    return {"message": "Email verified. You can now sign in."}
+
+
+@app.post("/auth/resend-verification")
+@app.post("/auth/forgot-password")
+def request_account_email(data: EmailSchema, request: Request, db: Session = Depends(get_db_or_503)):
+    auth_throttle(db, request, data.email)
+    if not security.mail_configured():
+        raise HTTPException(503, "Account email delivery is not configured. Please contact the administrator.")
+    purpose = "reset" if request.url.path.endswith("forgot-password") else "verify"
+    user = auth.get_user_by_email(db, data.email)
+    if user and user.is_active and (purpose == "reset" or not user.email_verified):
+        token = security.issue_token(db, purpose, str(user.id))
+        security.send_account_email(user.email, token, purpose)
+        db.commit()
+    return {"message": "If this address is eligible, an email has been sent. Check your inbox and spam folder."}
+
+
+@app.post("/auth/reset-password")
+def reset_password(data: ResetSchema, request: Request, db: Session = Depends(get_db_or_503)):
+    auth_throttle(db, request)
+    security.validate_password(data.password)
+    token = security.consume_token(db, data.token, "reset")
+    user = db.get(models.User, token.user_id)
+    if not user.is_active:
+        raise HTTPException(400, "This account is unavailable.")
+    user.hashed_password = auth.hash_password(data.password)
+    user.email_verified = True
+    db.query(models.Session).filter_by(user_id=user.id).delete()
+    db.query(models.AuthToken).filter_by(user_id=user.id).delete()
+    db.commit()
+    return {"message": "Password reset. Sign in with your new password."}
+
+
+@app.post("/auth/google/start")
+def google_start(request: Request, link: bool = False, db: Session = Depends(get_db_or_503)):
+    user = get_current_user(request, db) if link else None
+    url, binding = google_oauth.begin(db, request, link_user=user)
+    response = JSONResponse({"url": url})
+    response.set_cookie(google_oauth.COOKIE, binding, httponly=True, secure=COOKIE_SECURE,
+                        samesite="none" if COOKIE_SECURE else "lax", max_age=600, path="/auth/google")
+    return response
+
+
+@app.get("/auth/google/callback")
+def google_callback(request: Request, code: str = "", state: str = "", db: Session = Depends(get_db_or_503)):
+    try:
+        user = google_oauth.complete(db, request, code, state, config_service.get(db)["registration_enabled"])
+        response = RedirectResponse(FRONTEND_URL.rstrip("/") + ("/admin" if user.role == "admin" else "/"), status_code=303)
+        set_session(response, db, user, request)
+    except (HTTPException, IntegrityError):
+        db.rollback()
+        response = RedirectResponse(FRONTEND_URL.rstrip("/") + "/login?google_error=1", status_code=303)
+    response.delete_cookie(google_oauth.COOKIE, path="/auth/google", secure=COOKIE_SECURE,
+                           httponly=True, samesite="none" if COOKIE_SECURE else "lax")
+    return response
+
 
 @app.get("/admin/usage")
 def get_admin_usage(
@@ -278,6 +416,8 @@ def get_admin_usage(
             "id": user.id,
             "email": user.email,
             "role": user.role,
+            "is_active": user.is_active,
+            "email_verified": user.email_verified,
             "created_at": user.created_at.isoformat() if user.created_at else None,
             "messages_today": int(messages_today or 0),
             "tokens_today": int(tokens_today or 0),
@@ -319,9 +459,7 @@ def get_admin_config(db: Session = Depends(get_db_or_503), _: models.User = Depe
 @app.put("/admin/config")
 def update_admin_config(data: AdminConfigSchema, db: Session = Depends(get_db_or_503), _: models.User = Depends(require_admin)):
     values = data.model_dump()
-    if any(value < 1 for value in values.values()):
-        raise HTTPException(status_code=400, detail="All limits must be positive")
-    row = config_service.update(db, values)
+    config_service.update(db, values, actor_id=str(_.id))
     return config_service.get(db)
 
 @app.get("/admin/conversations/{conversation_id}/messages")
@@ -374,13 +512,64 @@ def get_admin_events(
         for event_row, email in rows
     ]
 
+@app.patch("/admin/users/{user_id}")
+def update_admin_user(user_id: str, data: AdminUserSchema, db: Session = Depends(get_db_or_503),
+                      admin: models.User = Depends(require_admin)):
+    user = db.query(models.User).filter_by(id=user_id).with_for_update().first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.role == "admin":
+        raise HTTPException(400, "Administrator accounts cannot be suspended from this dashboard.")
+    user.is_active = data.is_active
+    if not data.is_active:
+        db.query(models.Session).filter_by(user_id=user.id).delete()
+        db.query(models.AuthToken).filter_by(user_id=user.id).delete()
+    telemetry_service.record(db, "admin_user_updated", user_id=admin.id, status="completed",
+                             reason=f"target={user.id}; active={data.is_active}")
+    db.commit()
+    return {"id": user.id, "is_active": user.is_active}
+
+
+@app.post("/admin/users/{user_id}/revoke-sessions")
+def revoke_user_sessions(user_id: str, db: Session = Depends(get_db_or_503),
+                         admin: models.User = Depends(require_admin)):
+    user = db.get(models.User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    count = db.query(models.Session).filter_by(user_id=user_id).delete()
+    telemetry_service.record(db, "admin_sessions_revoked", user_id=admin.id, status="completed", reason=f"target={user_id}")
+    db.commit()
+    return {"revoked": count}
+
+
+@app.get("/admin/status")
+def admin_status(db: Session = Depends(get_db_or_503), _: models.User = Depends(require_admin)):
+    return {"database": "connected", "active_sessions": db.query(models.Session).filter(models.Session.expires_at > security.now()).count(),
+            "google_configured": google_oauth.configured(), "email_configured": security.mail_configured(),
+            "secure_cookies": COOKIE_SECURE, "email_verification_required": True}
+
+
+def require_chat_user(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db_or_503)):
+    if current_user.role == "admin":
+        raise HTTPException(403, "Administrators use the dashboard; chat access is disabled.")
+    if not current_user.email_verified:
+        raise HTTPException(403, "Verify your email before using chat.")
+    return current_user
+
+
+def check_chat_enabled(db):
+    if not config_service.get(db)["chat_enabled"]:
+        raise HTTPException(503, "Chat is paused by the administrator. Please try again later.")
+
+
 # Chat Endpoints
 @app.post("/conversations")
 def create_conversation(
     data: CreateConversationSchema,
     db: Session = Depends(get_db_or_503),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_chat_user)
 ):
+    check_chat_enabled(db)
     conv = models.Conversation(user_id=current_user.id, title=data.title)
     db.add(conv)
     db.commit()
@@ -390,7 +579,7 @@ def create_conversation(
 @app.get("/conversations")
 def list_conversations(
     db: Session = Depends(get_db_or_503),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_chat_user)
 ):
     convs = db.query(models.Conversation).filter(models.Conversation.user_id == current_user.id).all()
     return [serialize_conversation(c) for c in convs]
@@ -400,7 +589,7 @@ def rename_conversation(
     conversation_id: str,
     data: RenameConversationSchema,
     db: Session = Depends(get_db_or_503),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_chat_user)
 ):
     title = data.title.strip()
     if not title:
@@ -422,7 +611,7 @@ def rename_conversation(
 def delete_conversation(
     conversation_id: str,
     db: Session = Depends(get_db_or_503),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_chat_user)
 ):
     conv = db.query(models.Conversation).filter(
         models.Conversation.id == conversation_id,
@@ -439,7 +628,7 @@ def delete_conversation(
 def get_messages(
     conversation_id: str,
     db: Session = Depends(get_db_or_503),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_chat_user)
 ):
     conv = db.query(models.Conversation).filter(
         models.Conversation.id == conversation_id,
@@ -540,7 +729,7 @@ async def post_message(
     conversation_id: str,
     data: SendMessageSchema,
     db: Session = Depends(get_db_or_503),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_chat_user)
 ):
     conv = db.query(models.Conversation).filter(
         models.Conversation.id == conversation_id,
@@ -548,6 +737,7 @@ async def post_message(
     ).first()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    check_chat_enabled(db)
     user_id = cast(str, current_user.id)
     runtime_config = config_service.get(db)
 
@@ -651,3 +841,63 @@ async def post_message(
                            completion_tokens=result["completion_tokens"],
                            estimated_cost=response["est_cost"])
     return response
+
+
+@app.post("/temporary-chat/messages")
+async def temporary_chat(data: TemporaryChatSchema, db: Session = Depends(get_db_or_503),
+                         user: models.User = Depends(require_chat_user)):
+    """Persist only quota totals and content-free operational metadata."""
+    check_chat_enabled(db)
+    config = config_service.get(db)
+    try:
+        limits.check_rate_limit(str(user.id), max_requests=config["rate_limit_requests"],
+                                window_seconds=config["rate_limit_window_seconds"])
+    except limits.RateLimitedError as exc:
+        raise HTTPException(429, {"reason": "rate", "message": "Too many messages. Please wait before trying again.",
+                                  "retry_after_seconds": int(exc.retry_after_seconds)})
+    history = [message.model_dump() for message in data.messages]
+    try:
+        context = await docs_service.get_advisor_context()
+    except docs_service.DocsServiceError:
+        raise HTTPException(503, "Advisor context is temporarily unavailable.") from None
+    grounding = _select_grounding(context["grounding_document"], history[-1]["content"])
+    system_content = f"{context['system_prompt']}\n\n" + (f"Relevant grounding context:\n{grounding}" if grounding else "")
+    prompt = [{"role": "system", "content": system_content}, *history]
+
+    def reserve():
+        try:
+            reservation = limits.reserve_daily_quota(db, str(user.id), daily_message_cap=config["daily_message_cap"],
+                                                      daily_token_cap=config["daily_token_cap"])
+            # The token reservation refreshes the same locked counter. Flush the
+            # message increment first so populate_existing cannot discard it.
+            db.flush()
+            budget = usage_service.reserve_token_budget(db, reservation,
+                prompt_tokens=conservative_token_estimate(prompt), max_completion_tokens=MAX_COMPLETION_TOKENS,
+                daily_cap=config["daily_token_cap"])
+            db.commit()
+            return reservation, budget
+        except BaseException:
+            db.rollback()
+            raise
+
+    try:
+        reservation, budget = await run_in_threadpool(reserve)
+    except (limits.CapExceededError, ValueError):
+        raise HTTPException(429, {"reason": "cap", "message": "You have reached today's usage limit."})
+    try:
+        result = await get_chat_completion(prompt, max_completion_tokens=budget.completion_tokens)
+    except Exception:
+        # Keep uncertain provider spend reserved. Never log exception text or content.
+        logger.warning("temporary_chat_provider_failure user_id=%s", user.id)
+        raise HTTPException(502, "The advisor service is temporarily unavailable.") from None
+
+    def finalize():
+        usage_service.reconcile_reservation(db, reservation, prompt_tokens=result["prompt_tokens"],
+            completion_tokens=result["completion_tokens"], est_cost=estimate_cost(result["prompt_tokens"], result["completion_tokens"]),
+            token_reservation=budget, daily_cap=config["daily_token_cap"])
+        telemetry_service.record(db, "temporary_chat_completed", user_id=user.id, status="completed",
+            prompt_tokens=result["prompt_tokens"], completion_tokens=result["completion_tokens"],
+            estimated_cost=estimate_cost(result["prompt_tokens"], result["completion_tokens"]))
+        db.commit()
+    await run_in_threadpool(finalize)
+    return {"content": result["content"]}

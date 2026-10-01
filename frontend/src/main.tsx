@@ -5,6 +5,8 @@ import './App.css'
 import App from './App.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
 
+document.documentElement.dataset.theme = localStorage.getItem('odin-theme') === 'dark' ? 'dark' : 'light'
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>

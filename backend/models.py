@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Float, Enum, UniqueConstraint
+from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Float, Boolean, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 import enum
 from database import Base
@@ -21,6 +21,9 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String, default=UserRole.USER.value)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    email_verified = Column(Boolean, nullable=False, default=False, server_default="false")
+    google_subject = Column(String, nullable=True, unique=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     conversations = relationship("Conversation", back_populates="user")
@@ -100,6 +103,8 @@ class AppConfig(Base):
     daily_token_cap = Column(Integer, nullable=False)
     rate_limit_requests = Column(Integer, nullable=False)
     rate_limit_window_seconds = Column(Integer, nullable=False)
+    registration_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    chat_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 class Session(Base):
@@ -107,4 +112,20 @@ class Session(Base):
     token_hash = Column(String, primary_key=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+
+class AuthToken(Base):
+    __tablename__ = "auth_tokens"
+    token_hash = Column(String, primary_key=True)
+    purpose = Column(String, nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    payload = Column(JSON, nullable=False, default=dict)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+
+class AuthRateLimit(Base):
+    __tablename__ = "auth_rate_limits"
+    key = Column(String, primary_key=True)
+    attempts = Column(Integer, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
