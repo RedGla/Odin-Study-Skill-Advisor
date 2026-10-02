@@ -2,6 +2,9 @@
 
 Updated October 2, 2026. Evidence: [FINAL_VERIFICATION.md](FINAL_VERIFICATION.md).
 
+The submission evidence below predates multi-persona support. Re-run the full
+suite and live acceptance checks for the current branch.
+
 ## Submission preparation
 
 - [x] Full automated suite: 128 passed, including evaluator and database-outage checks.
@@ -28,3 +31,11 @@ Updated October 2, 2026. Evidence: [FINAL_VERIFICATION.md](FINAL_VERIFICATION.md
 - [ ] Run current live quality/extraction evaluation with a dedicated account and human source review.
 
 Database-outage behavior has passed controlled injected-failure tests; no real production shutdown or recovery drill is claimed.
+
+## Multi-persona deployment acceptance
+
+- [ ] Apply persona migration `fa67bc89de01` on the target database.
+- [ ] Verify authenticated `/personas` exposes no Doc IDs.
+- [ ] Create Odin and Hela chats and confirm distinct prompts.
+- [ ] Change the new-chat selector and reopen a saved chat; confirm its persona remains.
+- [ ] Verify shared/persona-specific grounding and post-TTL refresh.

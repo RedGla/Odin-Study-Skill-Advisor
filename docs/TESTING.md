@@ -3,6 +3,18 @@
 Requirements: Python 3.12, Node.js 24, and Docker (or a disposable local
 PostgreSQL 16 database). Run commands from the repository root unless noted.
 
+## Credential-free unit checks
+
+```text
+python -m pytest backend/unit_tests eval -q
+```
+
+These tests need no PostgreSQL or live Google/OpenRouter credentials. Service
+imports suppress dotenv loading in this test directory. The full `pytest` suite
+also includes PostgreSQL tests below; it is not a database-free command.
+No backend lint/type-check tool or frontend test runner is configured. Use Python
+syntax compilation, frontend ESLint and the TypeScript build alongside tests.
+
 ## Backend
 
 Create and activate a Python environment, then install dependencies:
@@ -40,10 +52,10 @@ each test. Do not run separate pytest processes against the same database.
 
 The fixture overrides `DATABASE_URL`, disables application `.env` loading during
 imports, supplies a dummy provider key, and resets cache/rate state between tests.
-Google Docs fetching uses synthetic text. Provider calls are mocked by the tests;
+Google Sheets rows and Google Docs fetching use synthetic data. Provider calls are mocked by the tests;
 an unmocked external HTTP attempt fails fixture teardown even if the application
 catches its exception. No Google, OpenRouter, or production database secret is
-required. This suite does not verify real Google Docs/model behavior.
+required. This suite does not verify real Google Sheets/Docs/model behavior.
 
 Stop and remove the disposable container when done:
 

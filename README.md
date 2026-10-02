@@ -1,166 +1,435 @@
-# Odin — Advisor Console
+# Odin Study Skill Advisor
 
-- **Feature Name:** Advisor Console — Odin - Study Skill Advisor
-- **Doc Owner:** Red & Neil
-- **Date / Version:** October 2, 2026 / v0.1
-- **Timeline:** 3 weeks
-- **Deployment:** [Vercel frontend](https://advisor-console-nine.vercel.app), [Render backend](https://advisor-console.onrender.com), Supabase PostgreSQL.
-- **Stack:** React, TypeScript, Vite, Tailwind CSS; FastAPI, SQLAlchemy, Alembic; PostgreSQL, read-only Google Docs API, OpenRouter and Google OAuth.
+Odin Study Skill Advisor is a full-stack AI-assisted study and project support application. It provides authenticated users with persistent conversations, usage controls, configurable AI advisors, and Google Docs-based prompt/grounding content delivered through OpenRouter.
 
-Project 1 submission, revised October 2, 2026. Odin is an authenticated AI advisor workspace for study and project support, with saved and temporary conversations, Google Docs grounding, usage limits, account settings and an administrator dashboard. Google OAuth sign-in and account linking were added in response to feedback.
+The current implementation supports **multiple advisor personas**. Personas are configured through a Google Sheets registry, while the actual persona instructions remain in Google Docs.
 
-Read [PRD.md](PRD.md), [the timeline](docs/TIMELINE.md) and [submission verification](docs/FINAL_VERIFICATION.md). All three and this README are included in the submission ZIP.
+## Current Features
 
-## Sample admin account — reviewer demo
+- User authentication and protected chat routes
+- Persistent conversations stored in PostgreSQL
+- OpenRouter-backed AI responses
+- Google Docs-based system prompts and grounding documents
+- Google Sheets-based persona registry
+- Multiple selectable personas for new conversations
+- Conversation-level `persona_id` persistence
+- Existing conversations retain their original advisor
+- Daily message and token usage controls
+- Daily usage boundary based on **00:00 UTC**
+- Temporary chat mode
+- Conversation search, rename, delete, and export
+- Light and dark themes
+- Responsive frontend built with React + Vite
+- FastAPI backend
+- Alembic database migrations
+- Mocked credential-free persona tests
 
-Account supplied by the project owner for the sample admin demonstration:
+## Multi-Persona Architecture
 
-- Sign-in page: https://advisor-console-nine.vercel.app/login
-- Email: `phase5.regular.20260923@advisor-console-qa.com`
-- Password: provided in `DEMO_ACCESS.md` inside the private reviewer ZIP; intentionally excluded from Git.
-
-Use email/password sign-in for this account. Its current login availability and administrator role have not been independently verified in this documentation update; the email's `regular` label does not establish its role. No account or permissions were changed. The owner-supplied demo password is included only in the private reviewer ZIP, not in the repository. Distribute that ZIP only to intended reviewers.
-
-The revised PRD follows the original Google Docs template. See [template comparison](docs/PRD_TEMPLATE_REVIEW.md) for the remaining acceptance gaps; matching the document structure does not establish a full end-to-end pass.
-
-## Architecture and dependencies
-
-React browser → FastAPI REST API → PostgreSQL. The backend calls OpenRouter for completions and reads the persona and reference context through the Google Docs API. Credentials and document retrieval stay on the server; Axios sends session cookies for API requests.
-
-Use Python 3.12, Node.js 24 with npm, and PostgreSQL 16. Docker is optional for the isolated test database. The frontend uses React 19, TypeScript, Vite 8, Tailwind 4, React Router, Axios and react-markdown. Backend dependencies include FastAPI, SQLAlchemy, Alembic, psycopg2, Argon2, httpx and Google's API/auth libraries. Exact declared versions are in `backend/requirements.txt` and `frontend/package.json`; npm versions are locked in `frontend/package-lock.json`. Python transitive dependencies are not fully locked.
-
-## Get the project
-
-Extract the submission ZIP and open its `Advisor-Console` directory, or clone:
-
-```sh
-git clone --branch dev https://github.com/RedGla/Eskwelabs-Advisor-Console.git
-cd Eskwelabs-Advisor-Console
+```text
+User
+  ↓
+React / Vite frontend
+  ↓
+Create conversation + selected persona_id
+  ↓
+FastAPI backend
+  ↓
+Conversation.persona_id
+  ↓
+Google Sheets persona registry
+  ↓
+prompt_doc_id + grounding_doc_id
+  ↓
+Google Docs
+  ↓
+LLM context assembly
+  ↓
+OpenRouter
+  ↓
+Assistant response
 ```
 
-The ZIP contains current working files. After committing, rebuild it to record the submission commit and clean working state. `SUBMISSION_MANIFEST.json` inside it records the base commit, dirty state, packaging time and file hashes. It does not imply every file has been pushed to GitHub.
+The Google Sheet is a configuration registry only. The full persona prompt remains in Google Docs.
 
-## Backend setup
+## Persona Registry
 
-From the project root:
+The configured Google Sheet uses these columns:
 
-```sh
-python -m venv .venv
-```
-
-Activate with `.\.venv\Scripts\Activate.ps1` in PowerShell or `source .venv/bin/activate` on macOS/Linux. Then:
-
-```sh
-python -m pip install -r backend/requirements.txt
-```
-
-Copy `backend/.env.example` to `backend/.env` (`Copy-Item backend/.env.example backend/.env` in PowerShell or `cp backend/.env.example backend/.env` on macOS/Linux). Configure your own development values:
-
-| Variable | Purpose |
+| Column | Purpose |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection URL; percent-encode password characters |
-| `ENVIRONMENT` | `development` locally |
-| `FRONTEND_URL` | `http://localhost:5173` locally; exact allowed frontend origin |
-| `COOKIE_SECURE`, `COOKIE_SAMESITE` | `false`, `lax` for local HTTP; secure cookies for HTTPS deployment |
-| `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | Server-only provider key and model |
-| `GOOGLE_SYSTEM_PROMPT_DOCUMENT_ID` | Your system-prompt Google Doc ID |
-| `GOOGLE_GROUNDING_DOCUMENT_ID` | Your reference Google Doc ID |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Service-account JSON with read access to both Docs |
-| `GOOGLE_SERVICE_ACCOUNT_JSON_B64` | Alternative base64 credentials; configure one credential format |
-| `GOOGLE_DOCS_CACHE_TTL_SECONDS` | Cache lifetime, default 300 seconds |
+| `persona_id` | Stable internal identifier, e.g. `odin` or `persona_2` |
+| `display_name` | User-facing advisor name |
+| `prompt_doc_id` | Google Doc containing the persona/system prompt |
+| `grounding_doc_id` | Google Doc containing grounding/reference content |
+| `enabled` | Whether the persona can be selected for new chats |
+| `is_default` | Whether the persona is the default selection |
 
-Legacy aliases `GOOGLE_DOCS_PROMPT_ID` and `GOOGLE_DOCS_GROUNDING_ID` also work. Enable Google Docs API for your service-account project and share both documents with its email as a reader. Private document text and credentials are not distributed. Editing these Docs updates context after cache expiry; an outage uses a previous cached copy when available.
+Example:
 
-Create an empty development database with your PostgreSQL administration tool, configure its URL, then migrate and start:
+| persona_id | display_name | prompt_doc_id | grounding_doc_id | enabled | is_default |
+| --- | --- | --- | --- | --- | --- |
+| odin | Odin | `<odin-prompt-doc-id>` | `<shared-grounding-doc-id>` | TRUE | TRUE |
+| persona_2 | Hela | `<hela-prompt-doc-id>` | `<shared-grounding-doc-id>` | TRUE | FALSE |
 
-```sh
+Only non-secret configuration belongs in the Sheet. Service-account credentials and API keys must stay outside the repository.
+
+## Conversation Behavior
+
+The persona selector applies to **new conversations only**.
+
+Example:
+
+```text
+Advisor for next chat: Hela
+        ↓
+Create new conversation
+        ↓
+conversation.persona_id = persona_2
+        ↓
+Header shows Advisor: Hela
+```
+
+Changing the new-chat selector does **not** change an existing conversation. Existing chats keep the advisor that was stored when the conversation was created.
+
+This prevents system prompts from changing halfway through a conversation.
+
+## Repository Structure
+
+```text
+Odin-Study-Skill-Advisor/
+├── backend/
+│   ├── alembic/
+│   ├── tests/
+│   ├── unit_tests/
+│   ├── main.py
+│   ├── models.py
+│   ├── database.py
+│   ├── docs_service.py
+│   ├── personas_service.py
+│   ├── llm_service.py
+│   ├── usage_service.py
+│   ├── limits.py
+│   ├── config_service.py
+│   ├── requirements.txt
+│   ├── .env.example
+│   └── DEPLOYMENT.md
+├── frontend/
+│   ├── src/
+│   ├── public/
+│   ├── package.json
+│   └── README.md
+├── docs/
+├── scripts/
+├── PRD.md
+├── PRODUCT.md
+└── README.md
+```
+
+## Prerequisites
+
+- Python supported by the backend dependency set
+- PostgreSQL or Supabase PostgreSQL
+- Node.js + npm
+- Google Cloud project
+- Google Docs API enabled
+- Google Sheets API enabled
+- Google service account
+- OpenRouter API key
+
+## Backend Setup
+
+From the repository root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 cd backend
-python -m alembic upgrade head
-python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+python -m pip install -r requirements.txt
 ```
 
-Use an account permitted to create/alter the schema. Migrations include privilege hardening; consult [deployment notes](backend/DEPLOYMENT.md) before migrating an existing hosted database. `http://localhost:8000/health` checks API liveness, not database/provider readiness. Interactive API docs are at `http://localhost:8000/docs`.
+Create:
 
-## Frontend setup and execution
+```text
+backend/.env
+```
 
-In a second terminal, from the project root:
+from:
 
-```sh
+```text
+backend/.env.example
+```
+
+Never commit the real `.env`.
+
+### Important environment variables
+
+```env
+ENVIRONMENT=development
+FRONTEND_URL=http://localhost:5173
+COOKIE_SECURE=false
+COOKIE_SAMESITE=lax
+
+DATABASE_URL=postgresql://...
+
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_SITE_URL=http://localhost:5173
+OPENROUTER_SITE_NAME=Advisor Console
+
+GOOGLE_DOCS_PROMPT_ID=<legacy-odin-prompt-doc-id>
+GOOGLE_DOCS_GROUNDING_ID=<legacy-grounding-doc-id>
+
+GOOGLE_PERSONAS_SHEET_ID=<google-sheet-id>
+GOOGLE_PERSONAS_SHEET_RANGE=Sheet1!A2:F
+GOOGLE_PERSONAS_CACHE_TTL_SECONDS=300
+GOOGLE_DOCS_CACHE_TTL_SECONDS=300
+
+GOOGLE_SERVICE_ACCOUNT_JSON_B64=<base64-encoded-service-account-json>
+```
+
+The implementation also preserves the original Odin Google Docs settings as compatibility/fallback configuration.
+
+## Google Setup
+
+1. Create or select a Google Cloud project.
+2. Enable:
+   - Google Sheets API
+   - Google Docs API
+3. Create a service account.
+4. Create a JSON key for local/deployment use.
+5. Share the following with the service account email as Viewer:
+   - Persona master Sheet
+   - Odin prompt Doc
+   - Hela prompt Doc
+   - Grounding Doc(s)
+6. Configure the Sheet ID and exact worksheet range.
+
+For local development, Base64 credentials are recommended to avoid private-key newline parsing problems.
+
+Example generation:
+
+```powershell
+python -c "import base64; print(base64.b64encode(open(r'C:\path\to\service-account.json','rb').read()).decode())"
+```
+
+Then place the output in:
+
+```env
+GOOGLE_SERVICE_ACCOUNT_JSON_B64=...
+```
+
+## Database Migration
+
+The multi-persona feature adds `persona_id` to conversations.
+
+Apply migrations:
+
+```powershell
+cd backend
+alembic upgrade head
+```
+
+The multi-persona migration revision used during implementation is:
+
+```text
+fa67bc89de01
+```
+
+Existing rows receive an Odin-compatible default.
+
+Check current migration:
+
+```powershell
+alembic current
+```
+
+## Running the Backend
+
+```powershell
+cd backend
+uvicorn main:app --reload
+```
+
+Backend:
+
+```text
+http://127.0.0.1:8000
+```
+
+Swagger:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+## Running the Frontend
+
+In another terminal:
+
+```powershell
 cd frontend
-npm ci
-```
-
-Copy `.env.example` to `.env.local`, set `VITE_API_URL=http://localhost:8000`, then run:
-
-```sh
+npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. Register with a real email address and a 15–128 character password, then sign in. Registration/login do not require email delivery or verification in this revision. Start a saved conversation, send follow-up messages and reopen it from the sidebar. Temporary chat does not store message content, but usage and operational metadata remain. Account controls are in Settings. The admin dashboard requires a role assigned by a trusted database administrator; public registration cannot grant admin access.
-
-For a production frontend bundle and local preview:
-
-```sh
-npm run build
-npm run preview
-```
-
-Set the deployed API URL before building. Vite variables are public; never put secrets in them.
-
-## Google OAuth and email
-
-Google sign-in and explicit account linking implement the requested feedback. Configure `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `GOOGLE_OAUTH_REDIRECT_URI` only on the backend. Register the exact callback URL with the Google OAuth Web client (`http://localhost:8000/auth/google/callback` locally). Existing password users link Google from Settings; matching email alone does not link accounts or grant an administrator role. See [AUTH_SETUP.md](docs/AUTH_SETUP.md).
-
-Current source uses SMTP for account verification/recovery: configure `SMTP_HOST`, `SMTP_FROM`, optional `SMTP_USERNAME`/`SMTP_PASSWORD`, and `SMTP_PORT` (587 by default). Existing Resend template/documentation entries describe proposed configuration; the current `auth_security.py` does not implement that transport. Real OAuth consent and inbox delivery require deployment testing.
-
-## Repository structure
+Frontend:
 
 ```text
-backend/                  API, authentication, model/Docs services, quotas
-  alembic/                Database migrations
-  tests/                  API, security, failure and concurrency tests
-frontend/                 React app, build configuration and npm lockfile
-  src/App.tsx             Chat workspace
-  src/pages/              Login, Settings and Admin
-  public/                 Fonts, font license, icons and favicon
-  src/assets/             Images
-
-eval/                     Prompt dataset, evaluator, harness tests and live results
-docs/                     Setup, design decisions, timeline and verification
-scripts/                  Submission packaging script
-.github/workflows/ci.yml   Backend, frontend lint/build checks
-.impeccable/               Design configuration and visual review artifacts
-PRD.md                    Revised requirements and acceptance criteria
-README.md                 Setup and execution guide
+http://localhost:5173
 ```
 
-## Tests and evaluation
+## Persona API
 
-Follow [TESTING.md](docs/TESTING.md) to start disposable local PostgreSQL. With the Python environment active, from the root:
+Authenticated users can request:
 
-```sh
-python -m pytest -q -p no:cacheprovider
-python -m pytest eval/test_eval_harness.py -q -p no:cacheprovider
-python eval/run_eval.py --dry-run
+```http
+GET /personas
 ```
 
-Run `npm run lint` and `npm run build` from `frontend/`. The test database must be local with both username and database named `advisor_test`; its tables are reset. Never use the application database. Tests mock model/Docs calls. The October 2 submission run passed all 128 tests (including 15 evaluator tests and all three database-outage tests), plus frontend lint/build. See [verification](docs/FINAL_VERIFICATION.md) for evidence.
+Example response:
 
-[eval/prompts.json](eval/prompts.json) is the included dataset. [eval/results.md](eval/results.md) preserves the earlier live run, including failures and review requirements. Dry runs validate structure only. For live evaluation, configure a dedicated account and follow [EVAL.md](docs/EVAL.md). Live model acceptance is not established by mocked regression tests.
+```json
+[
+  {
+    "persona_id": "odin",
+    "display_name": "Odin",
+    "is_default": true
+  },
+  {
+    "persona_id": "persona_2",
+    "display_name": "Hela",
+    "is_default": false
+  }
+]
+```
 
-## Failure behavior and limitations
+Google Doc IDs are kept server-side and are not returned to the frontend.
 
-- Covered database failures return 503 with a friendly retry message. A failure after model completion may leave an uncertain reservation/pending turn; the API does not claim the result was saved.
-- Provider failures return 502. Docs failure without cached context returns 503; previously cached Docs can be used during an outage.
-- Grounding uses keyword matching, not embeddings. Factual accuracy and extraction resistance need source comparison and human review.
-- Chat rate limiting is per process and resets on restart; daily quotas are persisted. Distributed rate coordination and MFA are outside scope.
-- Model history is bounded, while stored history remains available. All users share one persona and grounding document. Costs are estimates using configured rates.
-- Database outage can prevent durable telemetry writes. Historical tests are not proof of the current deployment's OAuth, email, browser secrecy, live Docs refresh or recovery behavior.
+### Create conversation with persona
 
-## Submission packaging
+```json
+{
+  "title": "New Conversation",
+  "persona_id": "persona_2"
+}
+```
 
-Run `python scripts/package_submission.py` from the root. It creates the ZIP and checksum in `submission/`, includes source, migrations, scripts, tests, dataset, documentation and assets, and validates all included hashes. Submit the ZIP plus `PRD.md` and `README.md`; both documents also appear inside the ZIP.
+Clients that omit `persona_id` continue to use the configured default behavior.
 
-For the owner-authorized private reviewer copy, keep the demo login in Git-ignored `submission/DEMO_ACCESS.md` and run `python scripts/package_submission.py --include-demo-access`. This explicitly adds `DEMO_ACCESS.md` to the archive and its manifest. The default command omits it.
+## Daily Usage Reset
 
-Private environment files, keys, production data, `.git`, virtual environments, `node_modules`, caches and generated builds are excluded. Recreate dependencies using the setup instructions. The manifest records precisely what was included.
+The backend defines the current quota day using:
+
+```python
+datetime.now(timezone.utc).date().isoformat()
+```
+
+Therefore the daily usage boundary is:
+
+```text
+00:00 UTC
+```
+
+In Philippine Standard Time, that corresponds to **08:00 PHT**.
+
+The frontend currently reports the reset in UTC.
+
+## Testing
+
+Run backend tests:
+
+```powershell
+cd backend
+pytest
+```
+
+Run frontend checks:
+
+```powershell
+cd frontend
+npm run lint
+npm run build
+```
+
+The feature branch previously reported:
+
+- 32 credential-free tests passing
+- Python syntax compilation passing
+- Frontend lint passing
+- TypeScript/production build passing
+- `git diff --check` passing
+- Single Alembic head at `fa67bc89de01`
+
+Because UI-only changes were made after that validation, rerun the checks before final handoff.
+
+### Live integration verified during development
+
+- Database connection established using the intended database
+- Alembic persona migration applied successfully
+- Google service-account credentials loaded successfully
+- Google Sheets API enabled
+- Live `/personas` response returned both Odin and Hela
+- Frontend received both personas and rendered the new-chat advisor selector
+
+### Still recommended before production release
+
+- Run full PostgreSQL-backed test suite in the intended deployment environment
+- Verify live Odin response behavior
+- Verify live Hela response behavior in a newly created Hela conversation
+- Confirm reloading each conversation retains the stored advisor
+- Verify production Google Docs prompt access
+- Verify production OpenRouter request flow
+
+## Security
+
+Do not commit:
+
+```text
+.env
+service-account.json
+credentials.json
+private keys
+OpenRouter API keys
+database passwords
+OAuth client secrets
+Resend API keys
+```
+
+Commit only safe templates such as `.env.example`.
+
+## Development Workflow
+
+For feature work:
+
+```powershell
+git switch feature/multi-persona
+git status
+```
+
+Before review:
+
+```powershell
+git add .
+git commit -m "finalize multi-persona integration"
+git push
+```
+
+Use a Pull Request for review before merging to the primary branch.
+
+## Current Multi-Persona Status
+
+The multi-persona architecture is implemented on the feature branch and includes:
+
+- Google Sheets persona registry
+- Google Docs prompt/grounding lookup per persona
+- document-ID-specific caching
+- stored `persona_id` on conversations
+- persona-aware quota estimation and LLM generation
+- `/personas` endpoint
+- new-chat persona selector
+- current-conversation advisor badge
+- Odin compatibility behavior
+- updated database migration and tests
+
+The remaining work is release verification rather than core implementation.

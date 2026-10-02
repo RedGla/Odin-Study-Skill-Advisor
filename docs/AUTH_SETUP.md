@@ -77,29 +77,9 @@ Google-only users may use password recovery to set a password.
 
 ## Verification and password recovery email
 
-### Resend (recommended on Render Free)
-
-Set `RESEND_API_KEY` in the backend deployment environment. Odin calls Resend's
-HTTPS API with the existing HTTP client; no extra SDK is required. When this key
-is configured, Resend takes precedence over SMTP. Set `RESEND_FROM` to your
-verified sender, or use `Odin <onboarding@resend.dev>` for testing.
-
-**Without a domain, this test sender sends only to the email address associated
-with your Resend account.** Sign up with the inbox you want to test. Other users'
-verification and password-reset messages require a verified sending domain.
-See [Resend test-recipient restrictions](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain).
-The `resend.dev` address is a sender; it is not the recipient's address.
-
-Create a sending API key in Resend, save it directly in Render's environment
-settings, and redeploy the backend with this code. Keep the key out of Git and
-frontend `VITE_` variables. `FRONTEND_URL` must be the real frontend origin so
-links open the correct login page. After deployment, test **Forgot password?**
-for your existing Odin account using the same inbox as your Resend account.
-Local mocked tests verify integration and failure handling, not inbox delivery.
-
-[Render Free blocks outbound SMTP ports 25, 465 and 587](https://render.com/changelog/free-web-services-will-no-longer-allow-outbound-traffic-to-smtp-ports).
-Use the HTTPS integration on that tier; adding SMTP credentials alone will not
-provide delivery. Upgrade the sender to a verified domain before inviting others.
+The current transport is SMTP only. `RESEND_API_KEY` and `RESEND_FROM` are not
+read by the backend; setting them does not enable mail delivery. Choose hosting
+and a provider that permit the SMTP connection, then verify actual inbox delivery.
 
 ### SMTP (existing supported transport)
 

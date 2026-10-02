@@ -1,4 +1,4 @@
 @echo off
-cd /d C:\Users\rapha\Advisor-Console\backend
+cd /d "%~dp0"
 python -m uvicorn main:app --reload --port 8000
 pause

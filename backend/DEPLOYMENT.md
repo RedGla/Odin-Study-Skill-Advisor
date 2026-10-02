@@ -1,142 +1,106 @@
-# Deployment Configuration Guide
+# Deployment guide
 
-## Critical Issues Fixed
+## Local development sequence
 
-This application had three hardcoded settings that would break on deployment:
+1. Install Python dependencies with `python -m pip install -r backend/requirements.txt`
+   in an activated virtual environment. Install Node dependencies with `npm ci`
+   from `frontend`. See the root README for environment activation.
+2. Create an empty PostgreSQL database and a backend role able to run migrations.
+   Set `DATABASE_URL`; percent-encode password characters. Never use the live
+   application database for tests.
+3. Copy `backend/.env.example` to `backend/.env` and replace placeholders. Use
+   `ENVIRONMENT=development`, `FRONTEND_URL=http://localhost:5173`,
+   `COOKIE_SECURE=false`, `COOKIE_SAMESITE=lax`. Configure the OpenRouter key/model.
+   Google credentials are loaded on fetch, not import; missing credentials still
+   prevent live Docs generation. DATABASE_URL is required at backend import.
+4. Enable the **Google Docs API** in the service-account project.
+5. Enable the **Google Sheets API** in the same project.
+6. Create/configure a service account and set either `GOOGLE_SERVICE_ACCOUNT_JSON`
+   (raw JSON) or `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (base64 JSON) in private config.
+   Base64 takes precedence if both are set. GOOGLE_APPLICATION_CREDENTIALS file
+   loading is not implemented. The backend requests Docs and Sheets readonly scopes.
+7. Share the master persona Sheet with that service-account email as Viewer.
+8. Share every prompt and grounding Doc referenced by its rows as Viewer. Grounding
+   Docs can be shared by personas. Preserve the original Odin fallback Doc variables.
+9. Set `GOOGLE_PERSONAS_SHEET_ID` to your registry (omit to use the built-in project
+   master ID), `GOOGLE_PERSONAS_SHEET_RANGE=Personas!A2:F` or `Sheet1!A2:F`, and
+   optional `GOOGLE_PERSONAS_CACHE_TTL_SECONDS=300`. Populate the six columns as
+   described in the [README](../README.md#persona-configuration-and-conversation-behavior).
+10. From `backend`, run `python -m alembic upgrade head` **before starting the new backend**.
+11. Start locally with `python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000`
+    from `backend`, or use `python backend/run.py` from the root.
+12. Copy `frontend/.env.example` to `frontend/.env.local`, set
+    `VITE_API_URL=http://localhost:8000`, then run `npm run dev` from `frontend`.
+    `npm run build` produces `dist`; `npm run preview` previews it locally.
+13. Sign in as a regular user and verify `GET /personas` using the browser's
+    authenticated session. Expected fields are persona_id, display_name, is_default;
+    there must be no Doc IDs. Admin accounts cannot access chat routes.
+14. Select Odin and create a saved conversation. Confirm the response stores `odin`.
+15. Select Hela/your second enabled persona and create a second conversation.
+16. Confirm each prompt is used, with relevant shared or separate grounding.
+17. Change the new-chat selector, reopen the first chat, and confirm it retains its
+    stored persona. Check Doc edits after cache expiry. These are live acceptance
+    steps, not guarantees established by mocked tests.
 
-1. **CORS**: Hardcoded to `http://localhost:5173` (dev only)
-2. **Cookie Security**: `secure=False` (unsafe for HTTPS)
-3. **Cookie SameSite**: `samesite="lax"` (blocks cross-origin cookies)
+## Production: Render backend and Vercel frontend
 
-These are now **environment-configurable**.
+Use the same dependency, Google sharing and migration sequence with production
+secret configuration. Verify the intended repository, branch and service before
+deploying. Backend root is `backend`; build with `pip install -r requirements.txt`,
+run `python -m alembic upgrade head` as a release step, and start with
+`uvicorn main:app --host 0.0.0.0 --port $PORT` on Render's Linux runtime.
 
-## Local Development
+| Backend variable | Production value |
+| --- | --- |
+| ENVIRONMENT | production |
+| DATABASE_URL | Private target PostgreSQL URL |
+| FRONTEND_URL | Exact HTTPS frontend origin, without a path |
+| COOKIE_SECURE | true |
+| COOKIE_SAMESITE | none for separate Vercel/Render sites; lax for same-site hosting |
 
-No changes needed. The application defaults to:
-```
-ENVIRONMENT=development
-FRONTEND_URL=http://localhost:5173
-COOKIE_SECURE=false
-COOKIE_SAMESITE=lax
-```
+Configure the OpenRouter, Google credentials, registry and fallback Doc variables
+from the shared backend template. Keep secrets in deployment settings. In Vercel,
+use root `frontend`, build `npm run build`, output `dist`, and set public
+`VITE_API_URL` to the HTTPS backend URL before building. Redeploy after changing it.
+The committed `vercel.json` supplies SPA routing. `/health` tests liveness only.
 
-Run locally as usual:
-```bash
-uvicorn main:app --reload
-```
+Cross-site cookies also depend on browser policy; SameSite=none does not override
+third-party cookie blocking. Prefer same-site custom domains where needed. Keep
+CORS/origin checks enabled. Test login, session persistence and allowed-origin
+mutations on the actual deployment. Check request URLs and cookies in DevTools.
 
-## Production Deployment (Render Backend + Vercel Frontend)
+Google OAuth uses a separate Web client with the exact `/auth/google/callback`
+redirect URI. SMTP is the only implemented recovery/verification mail transport;
+Resend variables have no effect. Registration/login do not require email delivery.
+See [authentication setup](../docs/AUTH_SETUP.md) for these optional integrations.
 
-### Step 1: Backend Environment Variables (Render Dashboard)
+## Persona migration and rollback
 
-When deploying the backend to Render, add these environment variables:
+Revision `fa67bc89de01` follows `ef56ab78cd90`. It adds
+`conversations.persona_id VARCHAR NOT NULL DEFAULT 'odin'`. Existing rows receive
+Odin; IDs, titles, messages and ownership are preserved. This is additive, but
+PostgreSQL schema changes can acquire table locks, so schedule deployment normally.
+Earlier migrations also include auth and Supabase privilege hardening; inspect the
+current revision and resolve migration errors rather than stamping over them.
 
-| Variable | Value | Reason |
-|----------|-------|--------|
-| `ENVIRONMENT` | `production` | Enables production-mode CORS handling |
-| `FRONTEND_URL` | `https://your-app.vercel.app` | Your actual Vercel deployment URL |
-| `COOKIE_SECURE` | `true` | Required for HTTPS cookies |
-| `COOKIE_SAMESITE` | `none` | Required for cross-origin cookies (vercel.app ↔ render.com) |
+To roll back just this migration, coordinate an application rollback and run
+`python -m alembic downgrade ef56ab78cd90` from `backend`. The downgrade drops the
+persona column and loses stored persona selections. Back up first; the new backend
+requires the column and must not run against the downgraded schema.
 
-### Step 2: Frontend Environment Variables (Vercel)
+## Failure behavior and validation
 
-When deploying the frontend to Vercel, add this environment variable:
+- Sheet fetch/validation failure: log and use last-good cached rows, or legacy Odin
+  on a cold cache. Non-Odin chats without resolvable registry data return 503.
+- Empty/all-disabled valid Sheet: return no selectable personas; default creation
+  returns 503, explicit unknown/disabled IDs return 400. Existing disabled rows
+  remain usable by saved chats. Missing enabled default uses the first enabled row.
+- Docs fetch failure: use that document's stale cache; without it, message generation
+  returns 502 and does not call OpenRouter. Caches are per process and lost on restart.
+- Stored persona_id is immutable through the chat API; Docs/row configuration may
+  change after refresh. No private Doc IDs are exposed by persona discovery.
 
-| Variable | Value | Reason |
-|----------|-------|--------|
-| `VITE_API_URL` | `https://your-render-backend.onrender.com` | Your Render backend URL |
-
-**In Vercel Dashboard:**
-1. Go to Settings → Environment Variables
-2. Add `VITE_API_URL` with your Render backend URL
-3. Redeploy to apply changes
-
-### Step 3: Why These Settings Matter
-
-**Cross-Origin Cookies Problem:**
-- Frontend: `https://your-app.vercel.app` (Vercel)
-- Backend: `https://api.render.app` (Render)
-- These are different origins, so cookies are blocked unless:
-  - ✅ `secure=true` (HTTPS required)
-  - ✅ `samesite=none` (allows cross-origin)
-  - ✅ Backend explicitly allows the frontend URL in CORS
-
-**If You Skip This:**
-- Frontend sends login request → works ✅
-- Backend sets session cookie → fails ❌
-- User gets logged out immediately
-- "Not authenticated" errors on every request
-
-### Step 4: Verify on Production
-
-Test the login flow:
-```bash
-curl -X POST https://api.render.app/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com","password":"password"}' \
-  -v
-```
-
-Look for `Set-Cookie` header in the response. If missing or empty, the configuration is wrong.
-
-Also verify the frontend is calling the correct backend URL by checking the Network tab in browser DevTools — all API requests should go to your Render URL, not localhost.
-
-## Troubleshooting
-
-### Issue: "Not authenticated" after login on production
-- **Check**: Is `FRONTEND_URL` set correctly in Render dashboard?
-- **Check**: Are `COOKIE_SECURE` and `COOKIE_SAMESITE` set correctly?
-- **Check**: Is browser sending cookies? (DevTools → Application → Cookies)
-
-### Issue: CORS errors in browser console
-- **Solution**: Verify `FRONTEND_URL` matches your deployed URL exactly
-- **Solution**: Restart the Render service after changing environment variables
-
-### Issue: It works locally but not on production
-- This is 99% of the time a misconfigured `FRONTEND_URL` or missing `COOKIE_SECURE=true`
-- Use browser DevTools Network tab to see actual headers
-
-## Files Modified
-
-### Backend
-- `backend/main.py` — CORS and cookie configuration now environment-based
-- `backend/.env.example` — Environment variables for local development
-- `backend/.env.production` — Template for production settings
-
-### Frontend
-- `frontend/src/api/client.ts` — API URL now reads from `VITE_API_URL` environment variable
-- `frontend/.env.example` — Environment variables for local development
-- `frontend/.env.production` — Template for production settings
-
-### Documentation
-- `DEPLOYMENT.md` — This guide
-
-
-## Google Sheets personas
-
-Run `alembic upgrade head` from `backend` before deploying the new backend.
-The migration adds `persona_id VARCHAR NOT NULL DEFAULT 'odin'` to conversations;
-existing conversations retain Odin.
-
-Enable the Google Sheets API alongside the Docs API. Share the master Sheet and
-all prompt/grounding Docs with the existing service-account email as Viewer.
-Keep credentials in the existing secret environment variables. Configure:
-
-- `GOOGLE_PERSONAS_SHEET_ID`: defaults to the supplied master Sheet.
-- `GOOGLE_PERSONAS_SHEET_RANGE`: `Personas!A2:F`, or `Sheet1!A2:F` for the original tab.
-- `GOOGLE_PERSONAS_CACHE_TTL_SECONDS`: defaults to 300.
-
-Rows contain persona_id, display_name, prompt_doc_id, grounding_doc_id, enabled,
-and is_default. Boolean columns must be TRUE/FALSE. IDs must be unique; use at
-most one enabled default. Without a marked default the first enabled row is used.
-Keep the original Odin prompt/grounding environment variables as fallbacks.
-Sheet failures are logged and retain valid stale data. Without cached data only
-legacy Odin is available; unresolved Hela conversations return 503 rather than
-switching personas. Disabled personas are excluded from new chats, while existing
-chats retain their persona. Temporary chats continue using original Odin context.
-
-Credential-free checks: `python -m pytest backend/unit_tests eval -q`.
-The full backend suite requires the disposable local PostgreSQL advisor_test
-database configured in `backend/tests/conftest.py`. After setup, manually verify
-both personas, Doc access, stored persona IDs, and live OpenRouter responses.
-Mock tests do not verify live Google or production database integrations.
+Run `python -m pytest backend/unit_tests eval -q` for service/evaluator checks without
+PostgreSQL. Run the full suite with disposable PostgreSQL as described in
+[TESTING](../docs/TESTING.md), plus frontend lint/build. Live Google Sheets, Docs,
+OpenRouter, OAuth/mail and target database checks require configured environments.

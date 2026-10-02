@@ -583,7 +583,11 @@ async def create_conversation(
     current_user: models.User = Depends(require_chat_user)
 ):
     check_chat_enabled(db)
-    persona = await personas_service.get_persona(data.persona_id) if data.persona_id is not None else await personas_service.get_default_persona()
+    try:
+        persona = (await personas_service.get_persona(data.persona_id)
+                   if data.persona_id is not None else await personas_service.get_default_persona())
+    except personas_service.PersonasServiceError:
+        raise HTTPException(503, "No enabled personas are available. Please contact the administrator.") from None
     if persona is None:
         raise HTTPException(400, "Unknown or disabled persona")
     conv = models.Conversation(user_id=current_user.id, title=data.title, persona_id=persona["persona_id"])
@@ -776,7 +780,7 @@ async def post_message(
 
     try:
         # All lock-waiting DB work runs off the event loop; no lock spans the LLM await.
-            reservation, assistant_id, history = await run_in_threadpool(
+        reservation, assistant_id, history = await run_in_threadpool(
             prepare_reserved_turn, db, conv, user_id, data.content,
         )
     except limits.CapExceededError:

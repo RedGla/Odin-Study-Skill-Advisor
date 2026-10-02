@@ -21,6 +21,7 @@ def odin_fallback():
                 grounding_doc_id=docs_service.GROUNDING_DOCUMENT_ID, enabled=True, is_default=True)
 
 def parse_rows(rows):
+    """Validate rows; an empty or fully disabled registry is an intentional state."""
     personas = []
     seen = set()
     for row in rows:
@@ -36,8 +37,6 @@ def parse_rows(rows):
         personas.append(dict(persona_id=persona_id, display_name=name, prompt_doc_id=prompt,
                              grounding_doc_id=grounding, enabled=enabled.upper() == "TRUE",
                              is_default=default.upper() == "TRUE"))
-    if not any(p["enabled"] for p in personas):
-        raise PersonasServiceError("Persona registry has no enabled personas")
     if sum(p["enabled"] and p["is_default"] for p in personas) > 1:
         raise PersonasServiceError("Persona registry has multiple enabled defaults")
     return personas
@@ -51,6 +50,7 @@ def _fetch_personas():
         raise PersonasServiceError("Unable to read persona registry") from exc
 
 async def get_personas(include_disabled=False):
+    """Return copies of last-good rows, or legacy Odin only on cold fetch failure."""
     global _cache
     async with _cache_lock:
         if _cache is None or time.monotonic() - _cache[0] >= CACHE_TTL_SECONDS:
@@ -69,4 +69,6 @@ async def get_persona(persona_id, include_disabled=False):
 
 async def get_default_persona():
     personas = await get_personas()
+    if not personas:
+        raise PersonasServiceError("Persona registry has no enabled personas")
     return next((p for p in personas if p["is_default"]), personas[0])

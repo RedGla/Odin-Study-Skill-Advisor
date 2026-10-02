@@ -1,16 +1,89 @@
-# Odin frontend
+# Odin Advisor Frontend
 
-React 19, TypeScript, Vite 8, Tailwind 4, React Router, Axios and react-markdown. Use Node.js 24 and npm. Full setup is in [the root README](../README.md).
+React + TypeScript + Vite frontend for Odin Study Skill Advisor.
 
-From this directory:
+## Current Features
 
-1. Run `npm ci`.
-2. Copy `.env.example` to `.env.local`; set `VITE_API_URL=http://localhost:8000`.
-3. Start the backend using the root instructions, then run `npm run dev`.
-4. Open `http://localhost:5173`.
+- authenticated advisor workspace
+- persistent conversation list
+- conversation search
+- rename/delete
+- temporary chat
+- response copy/export
+- daily usage display
+- dark/light themes
+- multi-persona new-chat advisor selector
+- active-conversation advisor badge
 
-`npm run lint` checks ESLint. `npm run build` runs TypeScript and builds to `dist/`. `npm run preview` serves that bundle locally. Set `VITE_API_URL` before deployment builds; all `VITE_` variables are public.
+## Persona UX
 
-`src/App.tsx` contains chat; `src/pages/` contains Login, Settings and Admin. Shared navigation/dialogs are in `src/components/`; `src/api/client.ts` configures cookie-authenticated requests. Fonts/icons are in `public/`, imagery in `src/assets/`. SPA deployment routing is in `vercel.json`.
+The frontend loads:
 
-Lint/build are not browser or deployment integration tests. See [verification](../docs/FINAL_VERIFICATION.md).
+```http
+GET /personas
+```
+
+and renders enabled advisor choices.
+
+The selector applies only to new persistent conversations.
+
+Example:
+
+```text
+Advisor for next chat
+[ Hela ▼ ]
+```
+
+Creating a new conversation sends:
+
+```json
+{
+  "title": "New Conversation",
+  "persona_id": "persona_2"
+}
+```
+
+The active chat header reads the persona stored on the conversation.
+
+Changing the selector does not change an existing chat.
+
+## Development
+
+```powershell
+npm install
+npm run dev
+```
+
+Default Vite URL:
+
+```text
+http://localhost:5173
+```
+
+The backend should normally run at:
+
+```text
+http://127.0.0.1:8000
+```
+
+## Validation
+
+```powershell
+npm run lint
+npm run build
+```
+
+Rerun these after UI changes before handoff.
+
+## Responsive Layout
+
+The advisor sidebar is designed so that:
+
+- branding stays visible
+- new-chat persona picker stays visible
+- settings and temporary chat stay visible
+- usage information stays visible
+- logout stays visible
+- the conversation list consumes remaining height and scrolls
+
+This avoids requiring users to zoom out to access the persona picker on typical laptop displays.

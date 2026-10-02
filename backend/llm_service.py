@@ -136,6 +136,8 @@ async def get_chat_completion(messages: list[dict], max_completion_tokens: int |
 async def generate_llm_response(messages: list[dict], max_completion_tokens: int | None = None, *, persona=None, advisor_context=None) -> dict:
     """Generate a response using the configured persona and grounding docs.
 
+    ``persona`` selects registry Docs; omitting it preserves legacy Odin.
+    ``advisor_context`` reuses the exact context used for quota estimation.
     Returns the same dict as ``get_chat_completion`` plus two timing keys:
     ``docs_fetch_ms`` and ``llm_call_ms`` (wall-clock milliseconds).
     """

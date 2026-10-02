@@ -74,7 +74,7 @@ async def test_llm_persona_and_reused_context(monkeypatch):
     get_context.assert_not_awaited()
     assert completion.call_args.args[0][0]["content"].startswith("Hela prompt")
 
-@pytest.mark.parametrize("rows", [[], [ROWS[0], ROWS[0]], [ROWS[2]]])
+@pytest.mark.parametrize("rows", [[ROWS[0], ROWS[0]], [["id", "name", "prompt", "ground", "maybe", "FALSE"]]])
 def test_invalid_registry(rows):
     with pytest.raises(personas.PersonasServiceError):
         personas.parse_rows(rows)
@@ -105,3 +105,38 @@ def test_missing_credentials_are_lazy(monkeypatch):
     monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON_B64", raising=False)
     with pytest.raises(docs.DocsServiceError):
         docs._credentials()
+
+
+async def test_no_marked_default_uses_first_enabled(monkeypatch):
+    rows = personas.parse_rows(ROWS)
+    for row in rows:
+        row["is_default"] = False
+    monkeypatch.setattr(personas, "_fetch_personas", lambda: rows)
+    assert (await personas.get_default_persona())["persona_id"] == "odin"
+
+
+@pytest.mark.parametrize("rows", [[], [ROWS[2]]])
+async def test_empty_or_disabled_registry_does_not_enable_odin(monkeypatch, rows):
+    monkeypatch.setattr(personas, "_fetch_personas", lambda: personas.parse_rows(rows))
+    assert await personas.get_personas() == []
+    with pytest.raises(personas.PersonasServiceError):
+        await personas.get_default_persona()
+    assert await personas.get_persona("odin") is None
+    if rows:
+        assert (await personas.get_persona("off", True))["enabled"] is False
+
+
+def test_multiple_enabled_defaults_rejected():
+    rows = [list(row) for row in ROWS[:2]]
+    rows[0][5] = "TRUE"
+    with pytest.raises(personas.PersonasServiceError):
+        personas.parse_rows(rows)
+
+
+def test_credentials_include_both_readonly_scopes(monkeypatch):
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON_B64", raising=False)
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", '{}')
+    factory = MagicMock()
+    monkeypatch.setattr(docs.service_account.Credentials, "from_service_account_info", factory)
+    docs._credentials()
+    factory.assert_called_once_with({}, scopes=[docs.GOOGLE_DOCS_SCOPE, docs.GOOGLE_SHEETS_SCOPE])

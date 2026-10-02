@@ -1,4 +1,4 @@
-"""Fetch and cache the advisor's Google Docs prompt and grounding content."""
+"""Fetch persona prompts and grounding Docs with caches isolated by document ID."""
 
 import asyncio
 import json 
@@ -49,7 +49,8 @@ def _credentials() -> Any:
       development where the shell can handle embedded newlines).  Set in
       ``backend/.env``.
 
-    Exactly one must be non-empty; if neither is set a ``DocsServiceError`` is
+    Base64 credentials take precedence when both formats are set.
+    If neither is set a ``DocsServiceError`` is
     raised with an actionable message so the misconfiguration is obvious.
     """
     b64_val = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_B64", "").strip()
@@ -165,6 +166,7 @@ async def get_grounding_document(*, user_id=None, conversation_id=None) -> str:
 
 
 async def get_advisor_context(persona=None, *, user_id=None, conversation_id=None) -> dict[str, str]:
+    """Load a registry persona, or legacy Odin Docs when no persona is supplied."""
     if persona is not None:
         system_prompt, grounding_document = await asyncio.gather(
             get_document(persona["prompt_doc_id"], user_id=user_id, conversation_id=conversation_id),
