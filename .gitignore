@@ -18,5 +18,8 @@ dist/
 .DS_Store
 .vscode/
 
+# Generated submission archives (rebuild with scripts/package_submission.py)
+submission/
+
 # Google service account credentials
 advisor-console-508615-694fe264bce8.json

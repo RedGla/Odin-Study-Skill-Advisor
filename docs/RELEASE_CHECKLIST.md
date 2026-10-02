@@ -1,31 +1,30 @@
-# Release and Demo Checklist
+# Release and submission checklist
 
-## Before release
+Updated October 2, 2026. Evidence: [FINAL_VERIFICATION.md](FINAL_VERIFICATION.md).
 
-- [ ] Run `pytest -q` from `backend/`.
-- [ ] Run `npm run lint` and `npm run build` from `frontend/`.
-- [ ] Apply all Alembic migrations to the target database.
-- [ ] Confirm production `COOKIE_SECURE=true`, appropriate `COOKIE_SAMESITE`, and session expiry settings.
-- [ ] Confirm OpenRouter and Google credentials exist only as server environment variables.
-- [ ] Confirm admin caps/rate limits in `/admin/config`.
-- [ ] Run `python eval/run_eval.py --dry-run` and inspect `eval/results.md` metadata and rubric.
-- [ ] Run the live evaluator with a dedicated test account when provider access is available.
+## Submission preparation
 
-## Demo flow
+- [x] Full automated suite: 128 passed, including evaluator and database-outage checks.
+- [x] Frontend lint and TypeScript/production build passed.
+- [x] Dry-run evaluator report generated separately from live results.
+- [x] Preserve historical live results and their actual failure/review states.
+- [x] Revised PRD includes Google OAuth feedback and final specifications.
+- [x] Comprehensive root README and project-specific frontend README.
+- [x] Timeline/closeout and test evidence retained.
+- [x] Local HEAD compared with fresh remote dev SHA: equal; working tree changes remain unpushed.
+- [x] Reproducible ZIP packager includes documentation, source, assets and dataset, with hashes.
+- [ ] Owner uploads/sends final ZIP, PRD and README by the supplied deadline.
 
-- [ ] Register with a normalized email and verify short passwords are rejected.
-- [ ] Log in, send a multi-turn conversation, log out, log back in, and reopen it.
-- [ ] Show that the browser never receives system-prompt or grounding text.
-- [ ] Show admin today versus all-time usage labels.
-- [ ] Open an admin conversation and inspect status, timestamps, tokens, cost, and errors.
-- [ ] Demonstrate a rate-limit block and a cap block with clear responses.
-- [ ] Demonstrate Docs cache hit/miss behavior and, if possible, a live edit within TTL.
-- [ ] Demonstrate provider, Docs cold-cache, stale-cache, and database failure handling.
+## Separate deployment acceptance
 
-## Evidence to retain
+- [ ] Confirm all migrations on the actual target database (local test migrations passed).
+- [ ] Confirm production cookie, frontend-origin, session and secret configuration.
+- [ ] Confirm production admin caps and rate limits.
+- [ ] Verify real Google OAuth consent, callback and account linking.
+- [ ] Verify actual recovery/verification email delivery with the implemented mail transport.
+- [ ] Inspect browser network traffic for internal prompt/grounding exposure.
+- [ ] Log out/in and reopen a complete saved conversation in the deployed UI.
+- [ ] Verify a live Google Doc edit becomes visible after cache expiry.
+- [ ] Run current live quality/extraction evaluation with a dedicated account and human source review.
 
-- [ ] Backend test output.
-- [ ] Frontend lint/build output.
-- [ ] `eval/results.md` generated for the release commit.
-- [ ] Database migration revision.
-- [ ] Screenshots or screen recording for manual network-secrecy and conversation-reopen checks.
+Database-outage behavior has passed controlled injected-failure tests; no real production shutdown or recovery drill is claimed.

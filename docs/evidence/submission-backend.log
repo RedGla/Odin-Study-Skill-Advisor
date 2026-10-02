@@ -1,0 +1,22 @@
+........................................................................ [ 56%]
+........................................................                 [100%]
+============================== warnings summary ===============================
+..\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\rapha\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+..\AppData\Local\Programs\Python\Python312\Lib\site-packages\passlib\handlers\argon2.py:716
+  C:\Users\rapha\AppData\Local\Programs\Python\Python312\Lib\site-packages\passlib\handlers\argon2.py:716: DeprecationWarning: Accessing argon2.__version__ is deprecated and will be removed in a future release. Use importlib.metadata directly to query for argon2-cffi's packaging metadata.
+    _argon2_cffi.__version__, max_version)
+
+backend/tests/test_csrf_origin.py: 25 warnings
+backend/tests/test_db_failure.py: 4 warnings
+backend/tests/test_docs_failure.py: 5 warnings
+backend/tests/test_grounding_edge_cases.py: 4 warnings
+backend/tests/test_provider_failure.py: 9 warnings
+  C:\Users\rapha\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\testclient.py:455: DeprecationWarning: Setting per-request cookies=<...> is being deprecated, because the expected behaviour on cookie persistence is ambiguous. Set cookies directly on the client instance instead.
+    return super().request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: C:\Users\rapha\Advisor-Console\test-results\submission-backend.xml -
+128 passed, 49 warnings in 70.08s (0:01:10)
