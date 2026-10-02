@@ -1,13 +1,9 @@
 import models
 from tests.helpers import create_user
 
-def test_login_uses_opaque_server_session_and_logout_invalidates(client, db, monkeypatch):
-    import auth_security
-    links = []
-    monkeypatch.setattr(auth_security, "send_account_email", lambda *args: links.append(args))
+def test_login_uses_opaque_server_session_and_logout_invalidates(client, db):
     response = client.post("/auth/register", json={"email": " User@Acme.org ", "password": "unique long passphrase 123"})
     assert response.status_code == 200
-    assert client.post("/auth/verify-email", json={"token": links[0][1]}).status_code == 200
     login = client.post("/auth/login", json={"email": "user@acme.org", "password": "unique long passphrase 123"})
     assert login.status_code == 200
     cookie = login.cookies.get("session_token")

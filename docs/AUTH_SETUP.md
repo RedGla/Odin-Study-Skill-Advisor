@@ -45,6 +45,15 @@ be inspected through the connector.
    The repository production environment files now contain these public URLs.
    OAuth secrets belong only on the backend, never in a `VITE_` variable.
 
+For `Error 400: redirect_uri_mismatch`, open Google Cloud's Google Auth Platform
+**Clients** page and select the Web application client whose client ID matches
+Render's `GOOGLE_OAUTH_CLIENT_ID`. Under **Authorized redirect URIs**, add exactly
+`https://advisor-console.onrender.com/auth/google/callback` and save. Do not add
+`flowName=GeneralOAuthFlow`, a trailing slash, or the frontend URL. Adding this
+only under **Authorized JavaScript origins** does not register the callback.
+Start a fresh sign-in after saving. This Google-side registration cannot be
+fixed by removing the application's email-verification requirement.
+
 Local OAuth credentials are stored in Git-ignored `backend/.env` with the
 localhost callback. Shared templates intentionally contain no client secret.
 Saving local files does not configure Render or register callbacks in Google Cloud.
@@ -78,19 +87,21 @@ is always enabled. SMTP credentials are optional only for a trusted relay that
 does not require authentication. Provider delivery charges, if any, are separate
 from AI token costs. No email service or paid resource has been provisioned.
 
-Registration now requires inbox verification and no longer signs in immediately.
+Registration does not require email delivery or inbox verification. After signup,
+users return to the sign-in form and can log in with their password immediately.
+Password recovery still requires email delivery. Previously issued verification
+links remain usable, but verifying an email is optional for login and chat.
 Links expire in 30 minutes, are stored only as hashes, and are single-use.
 Tokens appear in URL fragments and are removed from the page URL after loading.
 Password reset revokes all sessions; a password change revokes other sessions
 and rotates the current one. New passwords require 15–128 characters. Existing
-passwords remain usable after email verification.
+passwords remain usable without email verification.
 
-**Existing accounts are not assumed verified.** Configure and test email
-delivery before rollout. Existing users, including admins, use **Resend
-verification** before their next password login. Existing sessions expire on
-their normal schedule; unverified accounts cannot send chat messages. Users
-whose legacy email cannot receive mail need administrator-assisted identity
-recovery outside this dashboard. Do not bypass verification broadly.
+**Existing accounts are not marked verified.** Their email ownership metadata
+is preserved, but existing users and admins can sign in without verification.
+Ordinary users can use chat regardless of verification status. Google identity
+validation, explicit account linking, suspension, role restrictions, and session
+protections remain enforced. No data migration is needed for this policy change.
 
 ## Cookies, origins, and deployment
 

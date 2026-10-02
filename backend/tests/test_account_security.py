@@ -13,23 +13,45 @@ from tests.helpers import auth_client, create_user, session_token
 PASSWORD = "a unique passphrase for tests"
 
 
-def test_dotted_gmail_registration_verification_and_login(client, db, monkeypatch):
+def test_registration_and_login_without_email_delivery_or_verification(client, db, monkeypatch):
     sent = []
+    monkeypatch.setattr(security, "mail_configured", lambda: False)
     monkeypatch.setattr(security, "send_account_email", lambda *args: sent.append(args))
     response = client.post("/auth/register", json={"email": " Ellise.Cruz@gmail.com ", "password": PASSWORD})
     assert response.status_code == 200
     user = db.query(models.User).one()
     assert user.email == "ellise.cruz@gmail.com"
     assert not user.email_verified
-    token = sent[0][1]
-    assert db.query(models.AuthToken).one().token_hash != token
-    assert client.post("/auth/login", json={"email": user.email, "password": PASSWORD}).status_code == 403
-    assert client.post("/auth/verify-email", json={"token": token}).status_code == 200
-    assert client.post("/auth/verify-email", json={"token": token}).status_code == 400
+    assert sent == []
+    assert db.query(models.AuthToken).count() == 0
     login = client.post("/auth/login", json={"email": "ELLISE.CRUZ@gmail.com", "password": PASSWORD})
     assert login.status_code == 200
     assert "HttpOnly" in login.headers["set-cookie"]
     assert client.get("/auth/me").status_code == 200
+    assert client.post("/conversations", json={}).status_code == 200
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_existing_unverified_accounts_can_login(client, db, role):
+    user = create_user(db, role=role)
+    user.email_verified = False
+    db.commit()
+    response = client.post("/auth/login", json={"email": user.email, "password": "password123"})
+    assert response.status_code == 200
+    if role == "admin":
+        assert client.get("/admin/status").json()["email_verification_required"] is False
+        assert client.post("/conversations", json={}).status_code == 403
+    else:
+        assert client.post("/conversations", json={}).status_code == 200
+
+
+def test_optional_legacy_verification_link_is_single_use(client, db):
+    user = create_user(db)
+    user.email_verified = False
+    token = security.issue_token(db, "verify", str(user.id))
+    db.commit()
+    assert client.post("/auth/verify-email", json={"token": token}).status_code == 200
+    assert client.post("/auth/verify-email", json={"token": token}).status_code == 400
 
 
 def test_legacy_case_insensitive_login_and_raw_id_cookie_rejected(client, db):

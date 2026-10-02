@@ -258,8 +258,6 @@ def register(data: RegisterSchema, request: Request, db: Session = Depends(get_d
     auth_throttle(db, request, data.email)
     if not config_service.get(db)["registration_enabled"]:
         raise HTTPException(403, "New registrations are currently paused.")
-    if not security.mail_configured():
-        raise HTTPException(503, "Account email delivery is not configured. Please contact the administrator.")
     email = auth.normalize_email(data.email)
     if auth.is_reserved_email_domain(email):
         raise HTTPException(400, "Use a real email address; example and test domains are not allowed.")
@@ -272,12 +270,10 @@ def register(data: RegisterSchema, request: Request, db: Session = Depends(get_d
         db.add(user)
         try:
             db.flush()
-            token = security.issue_token(db, "verify", str(user.id))
-            security.send_account_email(email, token, "verify")
             db.commit()
         except IntegrityError:
             db.rollback()
-    return {"message": "If this address can be registered, a verification link has been sent. Check your inbox, or sign in if you already have an account."}
+    return {"message": "You can now sign in with your email and password. If you already have an account, use your existing password."}
 
 
 _DUMMY_HASH = auth.hash_password("timing-only-not-an-account-password")
@@ -289,8 +285,6 @@ def login(data: LoginSchema, request: Request, response: Response, db: Session =
     valid = auth.verify_password(data.password, user.hashed_password if user else _DUMMY_HASH)
     if not user or not valid or not user.is_active:
         raise HTTPException(400, "Invalid email or password.")
-    if not user.email_verified:
-        raise HTTPException(403, "Verify your email before signing in. Use Resend verification if you need a new link.")
     set_session(response, db, user, request)
     return {"message": "Logged in successfully", "email": user.email, "role": user.role}
 
@@ -560,14 +554,12 @@ def revoke_user_sessions(user_id: str, db: Session = Depends(get_db_or_503),
 def admin_status(db: Session = Depends(get_db_or_503), _: models.User = Depends(require_admin)):
     return {"database": "connected", "active_sessions": db.query(models.Session).filter(models.Session.expires_at > security.now()).count(),
             "google_configured": google_oauth.configured(), "email_configured": security.mail_configured(),
-            "secure_cookies": COOKIE_SECURE, "email_verification_required": True}
+            "secure_cookies": COOKIE_SECURE, "email_verification_required": False}
 
 
 def require_chat_user(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db_or_503)):
     if current_user.role == "admin":
         raise HTTPException(403, "Administrators use the dashboard; chat access is disabled.")
-    if not current_user.email_verified:
-        raise HTTPException(403, "Verify your email before using chat.")
     return current_user
 
 

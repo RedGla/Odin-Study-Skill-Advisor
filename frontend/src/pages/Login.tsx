@@ -6,7 +6,7 @@ import { apiClient } from "../api/client";
 
 import { OdinMark, Icon } from "../components/Brand";
 
-type Mode = "login" | "register" | "forgot" | "resend" | "reset" | "verify";
+type Mode = "login" | "register" | "forgot" | "reset" | "verify";
 
 export default function Login() {
   const [link] = useState(() => new URLSearchParams(window.location.hash.slice(1)));
@@ -22,7 +22,7 @@ export default function Login() {
   const newPassword = mode === "register" || mode === "reset";
   const needsEmail = !["reset", "verify"].includes(mode);
   const needsPassword = ["login", "register", "reset"].includes(mode);
-  const labels: Record<Mode, string> = { login: "Sign in", register: "Create account", forgot: "Reset password", resend: "Resend verification", reset: "Save new password", verify: "Verify email" };
+  const labels: Record<Mode, string> = { login: "Sign in", register: "Create account", forgot: "Reset password", reset: "Save new password", verify: "Verify email" };
 
   useEffect(() => {
     window.history.replaceState(null, "", "/login");
@@ -52,12 +52,12 @@ export default function Login() {
         catch { setError("Your browser did not retain the sign-in cookie. Check your browser cookie settings or contact the administrator."); return; }
         navigate(data.role === "admin" ? "/admin" : "/", { replace: true });
       } else {
-        const endpoint = { register: "register", forgot: "forgot-password", resend: "resend-verification", reset: "reset-password", verify: "verify-email" }[mode];
+        const endpoint = { register: "register", forgot: "forgot-password", reset: "reset-password", verify: "verify-email" }[mode];
         const body = mode === "verify" ? { token: link.get("token") } : mode === "reset" ? { token: link.get("token"), password } : { email: normalizedEmail, ...(mode === "register" ? { password } : {}) };
         const { data } = await apiClient.post(`/auth/${endpoint}`, body);
         setNotice(data.message);
         setPassword(""); setConfirmPassword("");
-        if (mode === "verify" || mode === "reset") setMode("login");
+        if (mode === "register" || mode === "verify" || mode === "reset") setMode("login");
       }
     } catch (err) { reportError(err); }
     finally { setLoading(false); }
@@ -82,7 +82,7 @@ export default function Login() {
       <section className="login-form">
         <div className="login-mobile-brand brand-lockup"><OdinMark /><span>odin</span></div>
         <h1 className="text-3xl font-bold text-slate-900">{mode === "login" ? "Welcome back." : labels[mode]}</h1>
-        <p className="mt-2 mb-6 text-sm text-slate-500">{mode === "register" ? "Use your email address. We’ll send a link to verify it." : mode === "verify" ? "Confirm your email to finish setting up your account." : "Sign in to your Odin workspace."}</p>
+        <p className="mt-2 mb-6 text-sm text-slate-500">{mode === "register" ? "Create an account with your email and password. No email verification required." : mode === "verify" ? "Confirm ownership of your email address." : "Sign in to your Odin workspace."}</p>
         {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
         {notice && <p role="status" className="mb-4 rounded-lg bg-green-50 p-3 text-sm text-green-800">{notice}</p>}
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -94,7 +94,7 @@ export default function Login() {
         {(mode === "login" || mode === "register") && <><div className="my-4 text-center text-xs text-slate-400">or</div><button type="button" onClick={googleLogin} disabled={loading || !googleEnabled} className="w-full rounded-lg border border-slate-300 px-4 py-3 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"><svg className="odin-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21 12.2c0-.7-.1-1.4-.2-2.2H12v4h5.1a4.4 4.4 0 0 1-1.9 2.8 6 6 0 1 1 0-9.6l3-3A10 10 0 1 0 22 12Z" /></svg>Continue with Google</button>{!googleEnabled && <p className="mt-2 text-center text-xs text-slate-500">Google sign-in is awaiting administrator setup.</p>}</>}
         <nav aria-label="Account help" className="mt-6 flex flex-wrap justify-center gap-3 text-sm text-blue-700">
           {mode !== "login" && <button disabled={loading} onClick={() => switchMode("login")}>Back to sign in</button>}
-          {mode === "login" && <><button disabled={loading} onClick={() => switchMode("register")}>Create account</button><button disabled={loading} onClick={() => switchMode("forgot")}>Forgot password?</button><button disabled={loading} onClick={() => switchMode("resend")}>Resend verification</button></>}
+          {mode === "login" && <><button disabled={loading} onClick={() => switchMode("register")}>Create account</button><button disabled={loading} onClick={() => switchMode("forgot")}>Forgot password?</button></>}
         </nav>
       </section><p className="login-bottom">Odin · Advisor console</p></div>
     </main>
