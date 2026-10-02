@@ -1,8 +1,27 @@
 # Odin — Advisor Console
 
+- **Feature Name:** Advisor Console — Odin - Study Skill Advisor
+- **Doc Owner:** Red & Neil
+- **Date / Version:** October 2, 2026 / v0.1
+- **Timeline:** 3 weeks
+- **Deployment:** [Vercel frontend](https://advisor-console-nine.vercel.app), [Render backend](https://advisor-console.onrender.com), Supabase PostgreSQL.
+- **Stack:** React, TypeScript, Vite, Tailwind CSS; FastAPI, SQLAlchemy, Alembic; PostgreSQL, read-only Google Docs API, OpenRouter and Google OAuth.
+
 Project 1 submission, revised October 2, 2026. Odin is an authenticated AI advisor workspace for study and project support, with saved and temporary conversations, Google Docs grounding, usage limits, account settings and an administrator dashboard. Google OAuth sign-in and account linking were added in response to feedback.
 
 Read [PRD.md](PRD.md), [the timeline](docs/TIMELINE.md) and [submission verification](docs/FINAL_VERIFICATION.md). All three and this README are included in the submission ZIP.
+
+## Sample admin account — reviewer demo
+
+Account supplied by the project owner for the sample admin demonstration:
+
+- Sign-in page: https://advisor-console-nine.vercel.app/login
+- Email: `phase5.regular.20260923@advisor-console-qa.com`
+- Password: provided in `DEMO_ACCESS.md` inside the private reviewer ZIP; intentionally excluded from Git.
+
+Use email/password sign-in for this account. Its current login availability and administrator role have not been independently verified in this documentation update; the email's `regular` label does not establish its role. No account or permissions were changed. The owner-supplied demo password is included only in the private reviewer ZIP, not in the repository. Distribute that ZIP only to intended reviewers.
+
+The revised PRD follows the original Google Docs template. See [template comparison](docs/PRD_TEMPLATE_REVIEW.md) for the remaining acceptance gaps; matching the document structure does not establish a full end-to-end pass.
 
 ## Architecture and dependencies
 
@@ -141,5 +160,7 @@ Run `npm run lint` and `npm run build` from `frontend/`. The test database must 
 ## Submission packaging
 
 Run `python scripts/package_submission.py` from the root. It creates the ZIP and checksum in `submission/`, includes source, migrations, scripts, tests, dataset, documentation and assets, and validates all included hashes. Submit the ZIP plus `PRD.md` and `README.md`; both documents also appear inside the ZIP.
+
+For the owner-authorized private reviewer copy, keep the demo login in Git-ignored `submission/DEMO_ACCESS.md` and run `python scripts/package_submission.py --include-demo-access`. This explicitly adds `DEMO_ACCESS.md` to the archive and its manifest. The default command omits it.
 
 Private environment files, keys, production data, `.git`, virtual environments, `node_modules`, caches and generated builds are excluded. Recreate dependencies using the setup instructions. The manifest records precisely what was included.

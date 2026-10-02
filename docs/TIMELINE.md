@@ -2,7 +2,26 @@
 
 Updated October 2, 2026 (Asia/Manila). Due: Friday, October 2, 5:00 PM, using the user's local timezone for the supplied email's deadline.
 
-No original dated timeline was present. This is a closeout reconstruction from Git history and retained evidence, not a claim about the original planned dates.
+The original [Advisor Console execution timeline](https://docs.google.com/document/d/1Jqz4TxpsNRnNgX05y1PLt_j-xQXMLQeV/edit) has now been reviewed through Google Drive. It plans September 5–22, 2026 as a 2.5-week sprint; the PRD metadata calls the overall timeline **3 weeks**. The original PRD risk row also says four weeks, an inconsistency resolved here in favor of the requested three-week metadata. Planned dates below are not claims of actual completion on those dates.
+
+## Original planned sequence
+
+| Planned milestone | Date/window |
+| --- | --- |
+| Foundation: infrastructure, authentication, persisted chat shell | September 5–7 |
+| First check-in | September 9 |
+| Core advisor: Docs, model, grounding, persistence | Before the September 15 feature-complete check-in |
+| Controls and admin | September 13–14 |
+| Feature-complete check-in | September 15 |
+| Hardening: extraction, authorization/quotas, service failures | September 16–18 |
+| Live evaluation and writeup | September 19–20 |
+| Demo freeze, deployment verification and rehearsal | September 21 |
+| Final demo | September 22 |
+| Updated submission deadline from the supplied email | October 2, 5:00 PM |
+
+The source contains inconsistent core-advisor day/date labels; the sequence above preserves its milestone intent without inventing a single corrected daily schedule.
+
+## Observed closeout evidence
 
 | Milestone | Evidence/date | Status |
 | --- | --- | --- |

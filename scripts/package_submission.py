@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import argparse
 import json
 from pathlib import Path
 import re
@@ -31,9 +32,14 @@ def git(*args):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--include-demo-access", action="store_true",
+                        help="Include Git-ignored submission/DEMO_ACCESS.md in a private reviewer ZIP")
+    args = parser.parse_args()
     # Git supplies tracked and non-ignored files; read their CURRENT bytes.
     paths = sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")) - {""})
     files = {}
+    sources = {}
     for name in paths:
         relative = Path(name)
         if EXCLUDED_PARTS.intersection(relative.parts):
@@ -53,6 +59,16 @@ def main():
         if relative.suffix.lower() == ".json" and b'"type": "service_account"' in data:
             raise RuntimeError(f"Service account file excluded from distribution: {name}")
         files[name] = data
+        sources[name] = source
+
+    if args.include_demo_access:
+        demo = OUTPUT / "DEMO_ACCESS.md"
+        if demo.is_symlink() or not demo.resolve().is_relative_to(ROOT) or not demo.is_file():
+            raise RuntimeError("Expected local submission/DEMO_ACCESS.md for private reviewer access")
+        if subprocess.run(["git", "check-ignore", "-q", str(demo)], cwd=ROOT).returncode != 0:
+            raise RuntimeError("Demo access must be Git-ignored before packaging")
+        files["DEMO_ACCESS.md"] = demo.read_bytes()
+        sources["DEMO_ACCESS.md"] = demo
 
     required = {"PRD.md", "README.md", "frontend/README.md", "eval/prompts.json",
                 "docs/FINAL_VERIFICATION.md", "docs/TIMELINE.md",
@@ -67,6 +83,7 @@ def main():
         "snapshot": "Current local working files; not a claim of remote synchronization",
         "excluded": "Secrets/private env, Git history, dependencies, caches, builds, runtime databases and generated archives",
         "file_count": len(files),
+        "private_reviewer_demo_access_included": args.include_demo_access,
         "files": {name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
                   for name, data in files.items()},
     }
@@ -83,7 +100,7 @@ def main():
         for name, data in files.items():
             if archive.read("Advisor-Console/" + name) != data:
                 raise RuntimeError(f"ZIP content mismatch: {name}")
-            if (ROOT / name).read_bytes() != data:
+            if sources[name].read_bytes() != data:
                 raise RuntimeError(f"File changed during packaging; rerun: {name}")
     digest = hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()
     ARCHIVE.with_suffix(".zip.sha256").write_text(f"{digest}  {ARCHIVE.name}\n", encoding="utf-8")

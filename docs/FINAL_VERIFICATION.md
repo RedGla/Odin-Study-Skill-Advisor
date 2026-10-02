@@ -1,5 +1,11 @@
 # Final submission verification — October 2, 2026
 
+## Subsequent template review
+
+The original Google Docs PRD, Red & Neil copy and execution timeline have now been reviewed. `PRD.md` follows sections 0–9 and includes owner/version/deployment/stack, source-document links, flows, sample responses, schema and explicit feedback for Google OAuth. See `PRD_TEMPLATE_REVIEW.md` for comparison details. Full template acceptance is **not established**: current owner-facing message serialization includes estimated cost despite the original admin-only cost requirement; historical live-evaluation failures and manual deployment checks remain unresolved. This update changes documentation only and does not rerun or supersede the recorded application tests below.
+
+The README identifies the owner-supplied sample-admin account, with role/login status unverified. The private reviewer ZIP includes its password in `DEMO_ACCESS.md`, explicitly excluded from Git. The owner subsequently authorized committing and pushing the documentation revision; the refreshed manifest records its commit and working-tree state.
+
 This report supersedes the previous blanket PASS table. It describes the current local working files based on commit `a1203ec84598a7a3a3c2881e5421494799804db5`, including existing local changes and the submission documentation. Tests validate this source snapshot, not the deployed services.
 
 ## Executed checks
