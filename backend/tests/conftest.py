@@ -82,6 +82,10 @@ def isolated_integrations(monkeypatch, migrated_database):
     import auth_security
     monkeypatch.setattr(auth_security, "mail_configured", lambda: True)
     monkeypatch.setattr(auth_security, "send_account_email", lambda *args: None)
+    import personas_service
+    personas_service._cache = None
+    monkeypatch.setattr(personas_service, "_cache_lock", asyncio.Lock())
+    monkeypatch.setattr(personas_service, "_fetch_personas", lambda: [personas_service.odin_fallback()])
     docs_service._cache.clear()
     limits._request_log.clear()
     monkeypatch.setattr(docs_service, "_cache_lock", asyncio.Lock())

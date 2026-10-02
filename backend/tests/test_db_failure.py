@@ -123,7 +123,7 @@ def test_db_connection_drop_on_message_send(client, test_user):
 
     provider_completed = {"value": False}
 
-    async def completed_reply(history):
+    async def completed_reply(history, max_completion_tokens=None, **kwargs):
         provider_completed["value"] = True
         return llm_reply
 

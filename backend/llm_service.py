@@ -133,7 +133,7 @@ async def get_chat_completion(messages: list[dict], max_completion_tokens: int |
     }
 
 
-async def generate_llm_response(messages: list[dict], max_completion_tokens: int | None = None) -> dict:
+async def generate_llm_response(messages: list[dict], max_completion_tokens: int | None = None, *, persona=None, advisor_context=None) -> dict:
     """Generate a response using the configured persona and grounding docs.
 
     Returns the same dict as ``get_chat_completion`` plus two timing keys:
@@ -143,7 +143,7 @@ async def generate_llm_response(messages: list[dict], max_completion_tokens: int
     from docs_service import get_advisor_context
 
     t0 = _time.monotonic()
-    context = await get_advisor_context()
+    context = advisor_context if advisor_context is not None else await get_advisor_context(persona)
     docs_fetch_ms = round((_time.monotonic() - t0) * 1000, 1)
 
     query = messages[-1]["content"] if messages else ""

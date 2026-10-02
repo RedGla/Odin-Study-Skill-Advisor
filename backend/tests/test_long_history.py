@@ -50,7 +50,7 @@ async def test_long_history_is_trimmed_and_request_succeeds(db, monkeypatch):
 
     captured_history: list[list[dict]] = []
 
-    async def fake_llm(messages: list[dict]) -> dict:
+    async def fake_llm(messages: list[dict], max_completion_tokens=None, **kwargs) -> dict:
         captured_history.append(messages)
         return {
             "content": "ok",

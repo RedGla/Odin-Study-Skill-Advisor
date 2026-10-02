@@ -110,3 +110,33 @@ Also verify the frontend is calling the correct backend URL by checking the Netw
 
 ### Documentation
 - `DEPLOYMENT.md` — This guide
+
+
+## Google Sheets personas
+
+Run `alembic upgrade head` from `backend` before deploying the new backend.
+The migration adds `persona_id VARCHAR NOT NULL DEFAULT 'odin'` to conversations;
+existing conversations retain Odin.
+
+Enable the Google Sheets API alongside the Docs API. Share the master Sheet and
+all prompt/grounding Docs with the existing service-account email as Viewer.
+Keep credentials in the existing secret environment variables. Configure:
+
+- `GOOGLE_PERSONAS_SHEET_ID`: defaults to the supplied master Sheet.
+- `GOOGLE_PERSONAS_SHEET_RANGE`: `Personas!A2:F`, or `Sheet1!A2:F` for the original tab.
+- `GOOGLE_PERSONAS_CACHE_TTL_SECONDS`: defaults to 300.
+
+Rows contain persona_id, display_name, prompt_doc_id, grounding_doc_id, enabled,
+and is_default. Boolean columns must be TRUE/FALSE. IDs must be unique; use at
+most one enabled default. Without a marked default the first enabled row is used.
+Keep the original Odin prompt/grounding environment variables as fallbacks.
+Sheet failures are logged and retain valid stale data. Without cached data only
+legacy Odin is available; unresolved Hela conversations return 503 rather than
+switching personas. Disabled personas are excluded from new chats, while existing
+chats retain their persona. Temporary chats continue using original Odin context.
+
+Credential-free checks: `python -m pytest backend/unit_tests eval -q`.
+The full backend suite requires the disposable local PostgreSQL advisor_test
+database configured in `backend/tests/conftest.py`. After setup, manually verify
+both personas, Doc access, stored persona IDs, and live OpenRouter responses.
+Mock tests do not verify live Google or production database integrations.

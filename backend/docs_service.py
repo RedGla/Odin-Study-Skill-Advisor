@@ -16,10 +16,11 @@ load_dotenv()
 
 logger = logging.getLogger("advisor_console.docs")
 
+GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 GOOGLE_DOCS_SCOPE = "https://www.googleapis.com/auth/documents.readonly"
 SYSTEM_PROMPT_DOCUMENT_ID = os.getenv(
     "GOOGLE_SYSTEM_PROMPT_DOCUMENT_ID",
-    os.getenv("GOOGLE_DOCS_PROMPT_ID", "1ujFrCT7jG7PzeVcQIsunTXUDa9keuamYY-55k_lkl4"),
+    os.getenv("GOOGLE_DOCS_PROMPT_ID", "1ujFrCT7jG7PzeVcQIsunTXUDa9keuamYY-55k_lkl_4"),
 )
 GROUNDING_DOCUMENT_ID = os.getenv(
     "GOOGLE_GROUNDING_DOCUMENT_ID",
@@ -79,7 +80,7 @@ def _credentials() -> Any:
         )
 
     return service_account.Credentials.from_service_account_info(
-        info, scopes=[GOOGLE_DOCS_SCOPE]
+        info, scopes=[GOOGLE_DOCS_SCOPE, GOOGLE_SHEETS_SCOPE]
     )
 
 
@@ -144,8 +145,12 @@ async def _get_document(document_id: str, cache_key: str, *, user_id=None, conve
     return content
 
 
+async def get_document(document_id: str, user_id=None, conversation_id=None) -> str:
+    return await _get_document(document_id, f"document:{document_id}", user_id=user_id, conversation_id=conversation_id)
+
+
 async def get_system_prompt(*, user_id=None, conversation_id=None) -> str:
-    return await _get_document(SYSTEM_PROMPT_DOCUMENT_ID, "system_prompt", user_id=user_id, conversation_id=conversation_id)
+    return await get_document(SYSTEM_PROMPT_DOCUMENT_ID, user_id=user_id, conversation_id=conversation_id)
 
 def _emit_telemetry(event: str, **kwargs):
     try:
@@ -156,10 +161,16 @@ def _emit_telemetry(event: str, **kwargs):
 
 
 async def get_grounding_document(*, user_id=None, conversation_id=None) -> str:
-    return await _get_document(GROUNDING_DOCUMENT_ID, "grounding_document", user_id=user_id, conversation_id=conversation_id)
+    return await get_document(GROUNDING_DOCUMENT_ID, user_id=user_id, conversation_id=conversation_id)
 
 
-async def get_advisor_context(*, user_id=None, conversation_id=None) -> dict[str, str]:
+async def get_advisor_context(persona=None, *, user_id=None, conversation_id=None) -> dict[str, str]:
+    if persona is not None:
+        system_prompt, grounding_document = await asyncio.gather(
+            get_document(persona["prompt_doc_id"], user_id=user_id, conversation_id=conversation_id),
+            get_document(persona["grounding_doc_id"], user_id=user_id, conversation_id=conversation_id),
+        )
+        return {"system_prompt": system_prompt, "grounding_document": grounding_document}
     system_prompt, grounding_document = await asyncio.gather(
         get_system_prompt(user_id=user_id, conversation_id=conversation_id),
         get_grounding_document(user_id=user_id, conversation_id=conversation_id),

@@ -31,8 +31,8 @@ def test_docs_service_failure_no_cache(client, test_user):
 
 def test_docs_service_failure_warm_cache(client, test_user):
     docs_service._cache.clear()
-    docs_service._cache["system_prompt"] = (time.monotonic(), "Cached System Prompt")
-    docs_service._cache["grounding_document"] = (time.monotonic(), "Cached Grounding")
+    docs_service._cache[f"document:{docs_service.SYSTEM_PROMPT_DOCUMENT_ID}"] = (time.monotonic(), "Cached System Prompt")
+    docs_service._cache[f"document:{docs_service.GROUNDING_DOCUMENT_ID}"] = (time.monotonic(), "Cached Grounding")
 
     response = client.post("/conversations", json={"title": "Test"}, cookies={"session_token": session_token(str(test_user.id))})
     conv_id = response.json()["id"]

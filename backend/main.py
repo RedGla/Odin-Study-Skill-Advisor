@@ -22,6 +22,7 @@ from llm_service import generate_llm_response, get_chat_completion, estimate_cos
 import usage_service
 import limits
 import docs_service
+import personas_service
 import telemetry_service
 import config_service
 import logging
@@ -155,6 +156,7 @@ class ResetSchema(TokenSchema):
 # Chat Schemas
 class CreateConversationSchema(BaseModel):
     title: Optional[str] = "New Conversation"
+    persona_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 class RenameConversationSchema(BaseModel):
     title: str
@@ -191,7 +193,7 @@ class AdminUserSchema(BaseModel):
 
 # Serializers
 def serialize_conversation(c: models.Conversation) -> dict:
-    return {"id": c.id, "user_id": c.user_id, "title": c.title, "created_at": c.created_at, "updated_at": c.updated_at}
+    return {"id": c.id, "user_id": c.user_id, "title": c.title, "persona_id": c.persona_id or "odin", "created_at": c.created_at, "updated_at": c.updated_at}
 
 def serialize_message(m: models.Message) -> dict:
     """Serialize a Message object. Ensures 'sender' is always lowercase ('user' or 'assistant')."""
@@ -569,14 +571,22 @@ def check_chat_enabled(db):
 
 
 # Chat Endpoints
+@app.get("/personas")
+async def list_personas(current_user: models.User = Depends(require_chat_user)):
+    return [{key: p[key] for key in ("persona_id", "display_name", "is_default")}
+            for p in await personas_service.get_personas()]
+
 @app.post("/conversations")
-def create_conversation(
+async def create_conversation(
     data: CreateConversationSchema,
     db: Session = Depends(get_db_or_503),
     current_user: models.User = Depends(require_chat_user)
 ):
     check_chat_enabled(db)
-    conv = models.Conversation(user_id=current_user.id, title=data.title)
+    persona = await personas_service.get_persona(data.persona_id) if data.persona_id is not None else await personas_service.get_default_persona()
+    if persona is None:
+        raise HTTPException(400, "Unknown or disabled persona")
+    conv = models.Conversation(user_id=current_user.id, title=data.title, persona_id=persona["persona_id"])
     db.add(conv)
     db.commit()
     db.refresh(conv)
@@ -744,6 +754,9 @@ async def post_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     check_chat_enabled(db)
+    persona = await personas_service.get_persona(conv.persona_id or "odin", include_disabled=True)
+    if persona is None:
+        raise HTTPException(503, "This conversation persona is unavailable. Please try again later.")
     user_id = cast(str, current_user.id)
     runtime_config = config_service.get(db)
 
@@ -784,7 +797,7 @@ async def post_message(
         # conservative so actual provider tokenization cannot exceed the cap.
         # Fetch the same cached context used by generation so the reservation
         # reflects the actual prompt envelope rather than a guessed constant.
-        context = await docs_service.get_advisor_context(user_id=user_id, conversation_id=conversation_id)
+        context = await docs_service.get_advisor_context(persona=persona, user_id=user_id, conversation_id=conversation_id)
         grounding = _select_grounding(context["grounding_document"], history[-1]["content"] if history else "")
         system_content = f"{context['system_prompt']}\n\n" + (f"Relevant grounding context:\n{grounding}" if grounding else "")
         prompt_estimate = conservative_token_estimate([{"role": "system", "content": system_content}, *history])
@@ -803,14 +816,8 @@ async def post_message(
                 "reason": "token_cap",
                 "message": "You've reached today's token limit. Please try again tomorrow.",
             })
-        try:
-            result = await generate_llm_response(history, token_reservation.completion_tokens)
-        except TypeError as exc:
-            # Preserve compatibility with test doubles and legacy adapters
-            # that still expose the single-argument callable.
-            if "positional" not in str(exc) and "argument" not in str(exc):
-                raise
-            result = await generate_llm_response(history)
+        result = await generate_llm_response(history, token_reservation.completion_tokens,
+                                             persona=persona, advisor_context=context)
     except DatabaseOperationalError:
         # Unknown outcome: keep the reservation; the DB dependency returns 503.
         raise

@@ -20,7 +20,14 @@ interface ApiMessage {
   content: string;
 }
 
+interface Persona {
+  persona_id: string;
+  display_name: string;
+  is_default: boolean;
+}
+
 interface Conversation {
+  persona_id: string;
   id: string;
   title: string;
   created_at: string;
@@ -40,6 +47,14 @@ const STARTER_QUESTIONS = [
 ];
 
 export default function AppShell() {
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [selectedPersona, setSelectedPersona] = useState("");
+  useEffect(() => {
+    void apiClient.get<Persona[]>("/personas").then(({ data }) => {
+      setPersonas(data);
+      setSelectedPersona((data.find(p => p.is_default) ?? data[0])?.persona_id ?? "");
+    }).catch(() => { /* Creation can use the backend default if the registry is unavailable. */ });
+  }, []);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
@@ -153,6 +168,7 @@ export default function AppShell() {
     try {
       const response = await apiClient.post("/conversations", {
         title: "New Conversation",
+        ...(selectedPersona ? { persona_id: selectedPersona } : {}),
       });
       const newConv = response.data;
       setConversations((prev) => [newConv, ...prev]);
@@ -162,7 +178,7 @@ export default function AppShell() {
     } finally {
       setIsCreating(false);
     }
-  }, [isCreating, selectConversation]);
+  }, [isCreating, selectConversation, selectedPersona]);
 
   const fetchConversations = useCallback(async () => {
     try {
@@ -256,7 +272,7 @@ export default function AppShell() {
     try {
       let conversationId = currentConversationId;
       if (!temporary && !conversationId) {
-        const { data } = await apiClient.post<Conversation>("/conversations", { title: userMessage.slice(0, 60) });
+        const { data } = await apiClient.post<Conversation>("/conversations", { title: userMessage.slice(0, 60), ...(selectedPersona ? { persona_id: selectedPersona } : {}) });
         conversationId = data.id;
         setCurrentConversationId(data.id);
         setConversations((previous) => [data, ...previous]);
@@ -472,6 +488,11 @@ export default function AppShell() {
         <button className="mobile-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><Icon name="close" /></button>
         <div className="sidebar-tools">
           <p className="sidebar-label">WORKSPACE</p>
+          <label className="sidebar-label" htmlFor="new-chat-persona">Persona for new chats</label>
+          <select id="new-chat-persona" className="sidebar-tool" value={selectedPersona} disabled={isCreating || isLoading} onChange={event => setSelectedPersona(event.target.value)}>
+            {!personas.length && <option value="">Default advisor</option>}
+            {personas.map(persona => <option key={persona.persona_id} value={persona.persona_id}>{persona.display_name}</option>)}
+          </select>
           <button type="button" onClick={() => navigate("/settings")} className="sidebar-tool">
             <Icon name="settings" /> Settings
           </button>
